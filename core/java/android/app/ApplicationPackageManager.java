@@ -63,6 +63,7 @@ import android.os.UserManager;
 import android.util.ArrayMap;
 import android.util.Log;
 import android.view.Display;
+import android.os.SystemProperties;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.util.Preconditions;
@@ -287,7 +288,12 @@ final class ApplicationPackageManager extends PackageManager {
         // depending on what the current runtime's instruction set is.
         if (info.primaryCpuAbi != null && info.secondaryCpuAbi != null) {
             final String runtimeIsa = VMRuntime.getRuntime().vmInstructionSet();
-            final String secondaryIsa = VMRuntime.getInstructionSet(info.secondaryCpuAbi);
+
+            // Get the instruction set that the libraries of secondary Abi is supported.
+            // In presence of a native bridge this might be different than the one secondary Abi used.
+            String secondaryIsa = VMRuntime.getInstructionSet(info.secondaryCpuAbi);
+            final String secondaryDexCodeIsa = SystemProperties.get("ro.dalvik.vm.isa." + secondaryIsa);
+            secondaryIsa = secondaryDexCodeIsa.isEmpty() ? secondaryIsa : secondaryDexCodeIsa;
 
             // If the runtimeIsa is the same as the primary isa, then we do nothing.
             // Everything will be set up correctly because info.nativeLibraryDir will
@@ -1609,6 +1615,18 @@ final class ApplicationPackageManager extends PackageManager {
         return null;
     }
 
+    /**
+     * @hide
+     */
+    @Override
+    public boolean isUpgrade() {
+        try {
+            return mPM.isUpgrade();
+        } catch (RemoteException e) {
+            return false;
+        }
+    }
+
     @Override
     public PackageInstaller getPackageInstaller() {
         synchronized (mLock) {
@@ -1664,6 +1682,17 @@ final class ApplicationPackageManager extends PackageManager {
      * @hide
      */
     public Drawable loadItemIcon(PackageItemInfo itemInfo, ApplicationInfo appInfo) {
+        Drawable dr = loadUnbadgedItemIcon(itemInfo, appInfo);
+        if (itemInfo.showUserIcon != UserHandle.USER_NULL) {
+            return dr;
+        }
+        return getUserBadgedIcon(dr, new UserHandle(mContext.getUserId()));
+    }
+
+    /**
+     * @hide
+     */
+    public Drawable loadUnbadgedItemIcon(PackageItemInfo itemInfo, ApplicationInfo appInfo) {
         if (itemInfo.showUserIcon != UserHandle.USER_NULL) {
             Bitmap bitmap = getUserManager().getUserIcon(itemInfo.showUserIcon);
             if (bitmap == null) {
@@ -1678,7 +1707,7 @@ final class ApplicationPackageManager extends PackageManager {
         if (dr == null) {
             dr = itemInfo.loadDefaultIcon(this);
         }
-        return getUserBadgedIcon(dr, new UserHandle(mContext.getUserId()));
+        return dr;
     }
 
     private Drawable getBadgedDrawable(Drawable drawable, Drawable badgeDrawable,

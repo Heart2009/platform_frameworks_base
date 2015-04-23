@@ -16,6 +16,15 @@
 
 //#define LOG_NDEBUG 0
 #define LOG_TAG "DngCreator_JNI"
+#include <inttypes.h>
+#include <string.h>
+
+#include <utils/Log.h>
+#include <utils/Errors.h>
+#include <utils/StrongPointer.h>
+#include <utils/RefBase.h>
+#include <utils/Vector.h>
+#include <cutils/properties.h>
 
 #include <system/camera_metadata.h>
 #include <camera/CameraMetadata.h>
@@ -27,6 +36,7 @@
 #include <img_utils/Input.h>
 #include <img_utils/StripSource.h>
 
+#include "core_jni_helpers.h"
 #include <utils/Log.h>
 #include <utils/Errors.h>
 #include <utils/StrongPointer.h>
@@ -35,6 +45,7 @@
 #include <cutils/properties.h>
 
 #include <string.h>
+#include <inttypes.h>
 
 #include "android_runtime/AndroidRuntime.h"
 #include "android_runtime/android_hardware_camera2_CameraMetadata.h"
@@ -360,15 +371,18 @@ ssize_t JniInputByteBuffer::read(uint8_t* buf, size_t offset, size_t count) {
         realCount = count;
     }
 
-    mEnv->CallObjectMethod(mInBuf, gInputByteBufferClassInfo.mGetMethod, mByteArray, 0,
+    jobject chainingBuf = mEnv->CallObjectMethod(mInBuf, gInputByteBufferClassInfo.mGetMethod, mByteArray, 0,
             realCount);
+    mEnv->DeleteLocalRef(chainingBuf);
 
     if (mEnv->ExceptionCheck()) {
+        ALOGE("%s: Exception while reading from input into byte buffer.", __FUNCTION__);
         return BAD_VALUE;
     }
 
     mEnv->GetByteArrayRegion(mByteArray, 0, realCount, reinterpret_cast<jbyte*>(buf + offset));
     if (mEnv->ExceptionCheck()) {
+        ALOGE("%s: Exception while reading from byte buffer.", __FUNCTION__);
         return BAD_VALUE;
     }
     return realCount;
@@ -427,7 +441,6 @@ InputStripSource::InputStripSource(JNIEnv* env, Input& input, uint32_t ifd, uint
 InputStripSource::~InputStripSource() {}
 
 status_t InputStripSource::writeToStream(Output& stream, uint32_t count) {
-    status_t err = OK;
     uint32_t fullSize = mWidth * mHeight * mBytesPerSample * mSamplesPerPixel;
     jlong offset = mOffset;
 
@@ -469,15 +482,17 @@ status_t InputStripSource::writeToStream(Output& stream, uint32_t count) {
 
     for (uint32_t i = 0; i < mHeight; ++i) {
         size_t rowFillAmt = 0;
-        size_t rowSize = mPixStride;
+        size_t rowSize = mRowStride;
 
         while (rowFillAmt < mRowStride) {
             ssize_t bytesRead = mInput->read(rowBytes, rowFillAmt, rowSize);
             if (bytesRead <= 0) {
                 if (bytesRead == NOT_ENOUGH_DATA || bytesRead == 0) {
+                    ALOGE("%s: Early EOF on row %" PRIu32 ", received bytesRead %zd",
+                            __FUNCTION__, i, bytesRead);
                     jniThrowExceptionFmt(mEnv, "java/io/IOException",
-                            "Early EOF encountered, not enough pixel data for image of size %u",
-                            fullSize);
+                            "Early EOF encountered, not enough pixel data for image of size %"
+                            PRIu32, fullSize);
                     bytesRead = NOT_ENOUGH_DATA;
                 } else {
                     if (!mEnv->ExceptionCheck()) {
@@ -759,7 +774,8 @@ static status_t generateNoiseProfile(const double* perChannelNoiseProfile, uint8
             }
         }
         if (uninitialized) {
-            ALOGE("%s: No valid NoiseProfile coefficients for color plane %u", __FUNCTION__, p);
+            ALOGE("%s: No valid NoiseProfile coefficients for color plane %zu",
+                  __FUNCTION__, p);
             return BAD_VALUE;
         }
     }
@@ -803,29 +819,20 @@ static TiffWriter* DngCreator_getCreator(JNIEnv* env, jobject thiz) {
 static void DngCreator_nativeClassInit(JNIEnv* env, jclass clazz) {
     ALOGV("%s:", __FUNCTION__);
 
-    gDngCreatorClassInfo.mNativeContext = env->GetFieldID(clazz,
-            ANDROID_DNGCREATOR_CTX_JNI_ID, "J");
-    LOG_ALWAYS_FATAL_IF(gDngCreatorClassInfo.mNativeContext == NULL,
-            "can't find android/hardware/camera2/DngCreator.%s",
-            ANDROID_DNGCREATOR_CTX_JNI_ID);
+    gDngCreatorClassInfo.mNativeContext = GetFieldIDOrDie(env,
+            clazz, ANDROID_DNGCREATOR_CTX_JNI_ID, "J");
 
-    jclass outputStreamClazz = env->FindClass("java/io/OutputStream");
-    LOG_ALWAYS_FATAL_IF(outputStreamClazz == NULL, "Can't find java/io/OutputStream class");
-    gOutputStreamClassInfo.mWriteMethod = env->GetMethodID(outputStreamClazz, "write", "([BII)V");
-    LOG_ALWAYS_FATAL_IF(gOutputStreamClassInfo.mWriteMethod == NULL, "Can't find write method");
+    jclass outputStreamClazz = FindClassOrDie(env, "java/io/OutputStream");
+    gOutputStreamClassInfo.mWriteMethod = GetMethodIDOrDie(env,
+            outputStreamClazz, "write", "([BII)V");
 
-    jclass inputStreamClazz = env->FindClass("java/io/InputStream");
-    LOG_ALWAYS_FATAL_IF(inputStreamClazz == NULL, "Can't find java/io/InputStream class");
-    gInputStreamClassInfo.mReadMethod = env->GetMethodID(inputStreamClazz, "read", "([BII)I");
-    LOG_ALWAYS_FATAL_IF(gInputStreamClassInfo.mReadMethod == NULL, "Can't find read method");
-    gInputStreamClassInfo.mSkipMethod = env->GetMethodID(inputStreamClazz, "skip", "(J)J");
-    LOG_ALWAYS_FATAL_IF(gInputStreamClassInfo.mSkipMethod == NULL, "Can't find skip method");
+    jclass inputStreamClazz = FindClassOrDie(env, "java/io/InputStream");
+    gInputStreamClassInfo.mReadMethod = GetMethodIDOrDie(env, inputStreamClazz, "read", "([BII)I");
+    gInputStreamClassInfo.mSkipMethod = GetMethodIDOrDie(env, inputStreamClazz, "skip", "(J)J");
 
-    jclass inputBufferClazz = env->FindClass("java/nio/ByteBuffer");
-    LOG_ALWAYS_FATAL_IF(inputBufferClazz == NULL, "Can't find java/nio/ByteBuffer class");
-    gInputByteBufferClassInfo.mGetMethod = env->GetMethodID(inputBufferClazz, "get",
-            "([BII)Ljava/nio/ByteBuffer;");
-    LOG_ALWAYS_FATAL_IF(gInputByteBufferClassInfo.mGetMethod == NULL, "Can't find get method");
+    jclass inputBufferClazz = FindClassOrDie(env, "java/nio/ByteBuffer");
+    gInputByteBufferClassInfo.mGetMethod = GetMethodIDOrDie(env,
+            inputBufferClazz, "get", "([BII)Ljava/nio/ByteBuffer;");
 }
 
 static void DngCreator_init(JNIEnv* env, jobject thiz, jobject characteristicsPtr,
@@ -853,7 +860,6 @@ static void DngCreator_init(JNIEnv* env, jobject thiz, jobject characteristicsPt
 
     const uint32_t samplesPerPixel = 1;
     const uint32_t bitsPerSample = BITS_PER_SAMPLE;
-    const uint32_t bitsPerByte = BITS_PER_SAMPLE / BYTES_PER_SAMPLE;
     uint32_t imageWidth = 0;
     uint32_t imageHeight = 0;
 
@@ -1278,7 +1284,7 @@ static void DngCreator_init(JNIEnv* env, jobject thiz, jobject characteristicsPt
             }
 
             BAIL_IF_INVALID(writer->addEntry(TAG_CAMERACALIBRATION2, entry2.count,
-                    calibrationTransform1, TIFF_IFD_0),  env, TAG_CAMERACALIBRATION2, writer);
+                    calibrationTransform2, TIFF_IFD_0),  env, TAG_CAMERACALIBRATION2, writer);
         }
     }
 
@@ -1401,8 +1407,9 @@ static void DngCreator_init(JNIEnv* env, jobject thiz, jobject characteristicsPt
 
         if (entry.count > 0) {
             if (entry.count != numCfaChannels * 2) {
-                ALOGW("%s: Invalid entry count %u for noise profile returned in characteristics,"
-                        " no noise profile tag written...", __FUNCTION__, entry.count);
+                ALOGW("%s: Invalid entry count %zu for noise profile returned "
+                      "in characteristics, no noise profile tag written...",
+                      __FUNCTION__, entry.count);
             } else {
                 if ((err = generateNoiseProfile(entry.data.d, cfaOut, numCfaChannels,
                         cfaPlaneColor, numPlaneColors, /*out*/ noiseProfile)) == OK) {
@@ -1637,7 +1644,7 @@ static void DngCreator_nativeSetThumbnail(JNIEnv* env, jobject thiz, jobject buf
 
     size_t fullSize = width * height * BYTES_PER_RGB_PIXEL;
     jlong capacity = env->GetDirectBufferCapacity(buffer);
-    if (capacity != fullSize) {
+    if (static_cast<uint64_t>(capacity) != static_cast<uint64_t>(fullSize)) {
         jniThrowExceptionFmt(env, "java/lang/AssertionError",
                 "Invalid size %d for thumbnail, expected size was %d",
                 capacity, fullSize);
@@ -1797,8 +1804,9 @@ static void DngCreator_nativeWriteImage(JNIEnv* env, jobject thiz, jobject outSt
         jint height, jobject inBuffer, jint rowStride, jint pixStride, jlong offset,
         jboolean isDirect) {
     ALOGV("%s:", __FUNCTION__);
-    ALOGV("%s: nativeWriteImage called with: width=%d, height=%d, rowStride=%d, pixStride=%d,"
-              " offset=%lld", __FUNCTION__, width, height, rowStride, pixStride, offset);
+    ALOGV("%s: nativeWriteImage called with: width=%d, height=%d, "
+          "rowStride=%d, pixStride=%d, offset=%" PRId64, __FUNCTION__, width,
+          height, rowStride, pixStride, offset);
     uint32_t rStride = static_cast<uint32_t>(rowStride);
     uint32_t pStride = static_cast<uint32_t>(pixStride);
     uint32_t uWidth = static_cast<uint32_t>(width);
@@ -1905,12 +1913,12 @@ static void DngCreator_nativeWriteInputStream(JNIEnv* env, jobject thiz, jobject
     uint32_t uHeight = static_cast<uint32_t>(height);
     uint64_t uOffset = static_cast<uint32_t>(offset);
 
-    ALOGV("%s: nativeWriteInputStream called with: width=%d, height=%d, rowStride=%u,"
-              "pixStride=%u, offset=%lld", __FUNCTION__, width, height, rowStride, pixStride,
-              offset);
+    ALOGV("%s: nativeWriteInputStream called with: width=%d, height=%d, "
+          "rowStride=%d, pixStride=%d, offset=%" PRId64, __FUNCTION__, width,
+          height, rowStride, pixStride, offset);
 
     sp<JniOutputStream> out = new JniOutputStream(env, outStream);
-    if(env->ExceptionCheck()) {
+    if (env->ExceptionCheck()) {
         ALOGE("%s: Could not allocate buffers for output stream", __FUNCTION__);
         return;
     }
@@ -1984,7 +1992,6 @@ static JNINativeMethod gDngCreatorMethods[] = {
 };
 
 int register_android_hardware_camera2_DngCreator(JNIEnv *env) {
-    return AndroidRuntime::registerNativeMethods(env,
-                   "android/hardware/camera2/DngCreator", gDngCreatorMethods,
-                   NELEM(gDngCreatorMethods));
+    return RegisterMethodsOrDie(env,
+            "android/hardware/camera2/DngCreator", gDngCreatorMethods, NELEM(gDngCreatorMethods));
 }

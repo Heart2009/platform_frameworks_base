@@ -438,9 +438,11 @@ static String8 JStringToString8(JNIEnv *env, jstring const &jstr) {
     Entry e = s.next();
 */
 
-static KeyedVector<String8, String8> HashMapToKeyedVector(JNIEnv *env, jobject &hashMap) {
+static KeyedVector<String8, String8> HashMapToKeyedVector(
+    JNIEnv *env, jobject &hashMap, bool* pIsOK) {
     jclass clazz = gFields.stringClassId;
     KeyedVector<String8, String8> keyedVector;
+    *pIsOK = true;
 
     jobject entrySet = env->CallObjectMethod(hashMap, gFields.hashmap.entrySet);
     if (entrySet) {
@@ -451,16 +453,22 @@ static KeyedVector<String8, String8> HashMapToKeyedVector(JNIEnv *env, jobject &
                 jobject entry = env->CallObjectMethod(iterator, gFields.iterator.next);
                 if (entry) {
                     jobject obj = env->CallObjectMethod(entry, gFields.entry.getKey);
-                    if (!env->IsInstanceOf(obj, clazz)) {
+                    if (obj == NULL || !env->IsInstanceOf(obj, clazz)) {
                         jniThrowException(env, "java/lang/IllegalArgumentException",
                                           "HashMap key is not a String");
+                        env->DeleteLocalRef(entry);
+                        *pIsOK = false;
+                        break;
                     }
                     jstring jkey = static_cast<jstring>(obj);
 
                     obj = env->CallObjectMethod(entry, gFields.entry.getValue);
-                    if (!env->IsInstanceOf(obj, clazz)) {
+                    if (obj == NULL || !env->IsInstanceOf(obj, clazz)) {
                         jniThrowException(env, "java/lang/IllegalArgumentException",
                                           "HashMap value is not a String");
+                        env->DeleteLocalRef(entry);
+                        *pIsOK = false;
+                        break;
                     }
                     jstring jvalue = static_cast<jstring>(obj);
 
@@ -667,7 +675,7 @@ static void android_media_MediaDrm_native_finalize(
 }
 
 static jboolean android_media_MediaDrm_isCryptoSchemeSupportedNative(
-    JNIEnv *env, jobject thiz, jbyteArray uuidObj, jstring jmimeType) {
+    JNIEnv *env, jobject /* thiz */, jbyteArray uuidObj, jstring jmimeType) {
 
     if (uuidObj == NULL) {
         jniThrowException(env, "java/lang/IllegalArgumentException", NULL);
@@ -763,7 +771,11 @@ static jobject android_media_MediaDrm_getKeyRequest(
 
     KeyedVector<String8, String8> optParams;
     if (joptParams != NULL) {
-        optParams = HashMapToKeyedVector(env, joptParams);
+        bool isOK;
+        optParams = HashMapToKeyedVector(env, joptParams, &isOK);
+        if (!isOK) {
+            return NULL;
+        }
     }
 
     Vector<uint8_t> request;
@@ -1003,6 +1015,27 @@ static jobject android_media_MediaDrm_getSecureStops(
     return ListOfVectorsToArrayListOfByteArray(env, secureStops);
 }
 
+static jbyteArray android_media_MediaDrm_getSecureStop(
+    JNIEnv *env, jobject thiz, jbyteArray ssid) {
+    sp<IDrm> drm = GetDrm(env, thiz);
+
+    if (drm == NULL) {
+        jniThrowException(env, "java/lang/IllegalStateException",
+                          "MediaDrm obj is null");
+        return NULL;
+    }
+
+    Vector<uint8_t> secureStop;
+
+    status_t err = drm->getSecureStop(JByteArrayToVector(env, ssid), secureStop);
+
+    if (throwExceptionAsNecessary(env, err, "Failed to get secure stop")) {
+        return NULL;
+    }
+
+    return VectorToJByteArray(env, secureStop);
+}
+
 static void android_media_MediaDrm_releaseSecureStops(
     JNIEnv *env, jobject thiz, jbyteArray jssRelease) {
     sp<IDrm> drm = GetDrm(env, thiz);
@@ -1018,6 +1051,21 @@ static void android_media_MediaDrm_releaseSecureStops(
     status_t err = drm->releaseSecureStops(ssRelease);
 
     throwExceptionAsNecessary(env, err, "Failed to release secure stops");
+}
+
+static void android_media_MediaDrm_releaseAllSecureStops(
+    JNIEnv *env, jobject thiz) {
+    sp<IDrm> drm = GetDrm(env, thiz);
+
+    if (drm == NULL) {
+        jniThrowException(env, "java/lang/IllegalStateException",
+                          "MediaDrm obj is null");
+        return;
+    }
+
+    status_t err = drm->releaseAllSecureStops();
+
+    throwExceptionAsNecessary(env, err, "Failed to release all secure stops");
 }
 
 static jstring android_media_MediaDrm_getPropertyString(
@@ -1137,7 +1185,7 @@ static void android_media_MediaDrm_setPropertyByteArray(
 }
 
 static void android_media_MediaDrm_setCipherAlgorithmNative(
-    JNIEnv *env, jobject thiz, jobject jdrm, jbyteArray jsessionId,
+    JNIEnv *env, jobject /* thiz */, jobject jdrm, jbyteArray jsessionId,
     jstring jalgorithm) {
 
     sp<IDrm> drm = GetDrm(env, jdrm);
@@ -1161,7 +1209,7 @@ static void android_media_MediaDrm_setCipherAlgorithmNative(
 }
 
 static void android_media_MediaDrm_setMacAlgorithmNative(
-    JNIEnv *env, jobject thiz, jobject jdrm, jbyteArray jsessionId,
+    JNIEnv *env, jobject /* thiz */, jobject jdrm, jbyteArray jsessionId,
     jstring jalgorithm) {
 
     sp<IDrm> drm = GetDrm(env, jdrm);
@@ -1186,7 +1234,7 @@ static void android_media_MediaDrm_setMacAlgorithmNative(
 
 
 static jbyteArray android_media_MediaDrm_encryptNative(
-    JNIEnv *env, jobject thiz, jobject jdrm, jbyteArray jsessionId,
+    JNIEnv *env, jobject /* thiz */, jobject jdrm, jbyteArray jsessionId,
     jbyteArray jkeyId, jbyteArray jinput, jbyteArray jiv) {
 
     sp<IDrm> drm = GetDrm(env, jdrm);
@@ -1217,7 +1265,7 @@ static jbyteArray android_media_MediaDrm_encryptNative(
 }
 
 static jbyteArray android_media_MediaDrm_decryptNative(
-    JNIEnv *env, jobject thiz, jobject jdrm, jbyteArray jsessionId,
+    JNIEnv *env, jobject /* thiz */, jobject jdrm, jbyteArray jsessionId,
     jbyteArray jkeyId, jbyteArray jinput, jbyteArray jiv) {
 
     sp<IDrm> drm = GetDrm(env, jdrm);
@@ -1247,7 +1295,7 @@ static jbyteArray android_media_MediaDrm_decryptNative(
 }
 
 static jbyteArray android_media_MediaDrm_signNative(
-    JNIEnv *env, jobject thiz, jobject jdrm, jbyteArray jsessionId,
+    JNIEnv *env, jobject /* thiz */, jobject jdrm, jbyteArray jsessionId,
     jbyteArray jkeyId, jbyteArray jmessage) {
 
     sp<IDrm> drm = GetDrm(env, jdrm);
@@ -1277,7 +1325,7 @@ static jbyteArray android_media_MediaDrm_signNative(
 }
 
 static jboolean android_media_MediaDrm_verifyNative(
-    JNIEnv *env, jobject thiz, jobject jdrm, jbyteArray jsessionId,
+    JNIEnv *env, jobject /* thiz */, jobject jdrm, jbyteArray jsessionId,
     jbyteArray jkeyId, jbyteArray jmessage, jbyteArray jsignature) {
 
     sp<IDrm> drm = GetDrm(env, jdrm);
@@ -1306,7 +1354,7 @@ static jboolean android_media_MediaDrm_verifyNative(
 
 
 static jbyteArray android_media_MediaDrm_signRSANative(
-    JNIEnv *env, jobject thiz, jobject jdrm, jbyteArray jsessionId,
+    JNIEnv *env, jobject /* thiz */, jobject jdrm, jbyteArray jsessionId,
     jstring jalgorithm, jbyteArray jwrappedKey, jbyteArray jmessage) {
 
     sp<IDrm> drm = GetDrm(env, jdrm);
@@ -1384,8 +1432,14 @@ static JNINativeMethod gMethods[] = {
     { "getSecureStops", "()Ljava/util/List;",
       (void *)android_media_MediaDrm_getSecureStops },
 
+    { "getSecureStop", "([B)[B",
+      (void *)android_media_MediaDrm_getSecureStop },
+
     { "releaseSecureStops", "([B)V",
       (void *)android_media_MediaDrm_releaseSecureStops },
+
+    { "releaseAllSecureStops", "()V",
+      (void *)android_media_MediaDrm_releaseAllSecureStops },
 
     { "getPropertyString", "(Ljava/lang/String;)Ljava/lang/String;",
       (void *)android_media_MediaDrm_getPropertyString },

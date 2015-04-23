@@ -24,7 +24,7 @@
 #include <gui/GLConsumer.h>
 #include <gui/Surface.h>
 
-#include <android_runtime/AndroidRuntime.h>
+#include "core_jni_helpers.h"
 
 #include <utils/Log.h>
 #include <utils/misc.h>
@@ -121,7 +121,7 @@ class JNISurfaceTextureContext : public GLConsumer::FrameAvailableListener
 public:
     JNISurfaceTextureContext(JNIEnv* env, jobject weakThiz, jclass clazz);
     virtual ~JNISurfaceTextureContext();
-    virtual void onFrameAvailable();
+    virtual void onFrameAvailable(const BufferItem& item);
 
 private:
     static JNIEnv* getJNIEnv(bool* needsDetach);
@@ -177,7 +177,7 @@ JNISurfaceTextureContext::~JNISurfaceTextureContext()
     }
 }
 
-void JNISurfaceTextureContext::onFrameAvailable()
+void JNISurfaceTextureContext::onFrameAvailable(const BufferItem& /* item */)
 {
     bool needsDetach = false;
     JNIEnv* env = getJNIEnv(&needsDetach);
@@ -359,10 +359,8 @@ static JNINativeMethod gSurfaceTextureMethods[] = {
 
 int register_android_graphics_SurfaceTexture(JNIEnv* env)
 {
-    int err = 0;
-    err = AndroidRuntime::registerNativeMethods(env, kSurfaceTextureClassPathName,
-            gSurfaceTextureMethods, NELEM(gSurfaceTextureMethods));
-    return err;
+    return RegisterMethodsOrDie(env, kSurfaceTextureClassPathName, gSurfaceTextureMethods,
+                                NELEM(gSurfaceTextureMethods));
 }
 
 } // namespace android

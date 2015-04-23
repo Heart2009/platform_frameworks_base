@@ -7,6 +7,12 @@
 
 #define LOG_TAG "appproc"
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/prctl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <binder/IPCThreadState.h>
 #include <binder/ProcessState.h>
 #include <utils/Log.h>
@@ -17,14 +23,9 @@
 #include <android_runtime/AndroidRuntime.h>
 #include <private/android_filesystem_config.h>  // for AID_SYSTEM
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/prctl.h>
-
 namespace android {
 
-void app_usage()
+static void app_usage()
 {
     fprintf(stderr,
         "Usage: app_process [java-options] cmd-dir start-class-name [options]\n");
@@ -146,8 +147,10 @@ static void maybeCreateDalvikCache() {
     static const char kInstructionSet[] = "arm";
 #elif defined(__i386__)
     static const char kInstructionSet[] = "x86";
-#elif defined (__mips__)
+#elif defined (__mips__) && !defined(__LP64__)
     static const char kInstructionSet[] = "mips";
+#elif defined (__mips__) && defined(__LP64__)
+    static const char kInstructionSet[] = "mips64";
 #else
 #error "Unknown instruction set"
 #endif

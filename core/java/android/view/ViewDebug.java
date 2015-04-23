@@ -1005,21 +1005,22 @@ public class ViewDebug {
             return fields;
         }
 
-        final ArrayList<Field> foundFields = new ArrayList<Field>();
-        fields = klass.getDeclaredFields();
-
-        int count = fields.length;
-        for (int i = 0; i < count; i++) {
-            final Field field = fields[i];
-            if (field.isAnnotationPresent(ExportedProperty.class)) {
-                field.setAccessible(true);
-                foundFields.add(field);
-                sAnnotations.put(field, field.getAnnotation(ExportedProperty.class));
+        try {
+            final Field[] declaredFields = klass.getDeclaredFieldsUnchecked(false);
+            final ArrayList<Field> foundFields = new ArrayList<Field>();
+            for (final Field field : declaredFields) {
+              // Fields which can't be resolved have a null type.
+              if (field.getType() != null && field.isAnnotationPresent(ExportedProperty.class)) {
+                  field.setAccessible(true);
+                  foundFields.add(field);
+                  sAnnotations.put(field, field.getAnnotation(ExportedProperty.class));
+              }
             }
+            fields = foundFields.toArray(new Field[foundFields.size()]);
+            map.put(klass, fields);
+        } catch (NoClassDefFoundError e) {
+            throw new AssertionError(e);
         }
-
-        fields = foundFields.toArray(new Field[foundFields.size()]);
-        map.put(klass, fields);
 
         return fields;
     }
@@ -1039,12 +1040,18 @@ public class ViewDebug {
             return methods;
         }
 
-        final ArrayList<Method> foundMethods = new ArrayList<Method>();
-        methods = klass.getDeclaredMethods();
+        methods = klass.getDeclaredMethodsUnchecked(false);
 
-        int count = methods.length;
-        for (int i = 0; i < count; i++) {
-            final Method method = methods[i];
+        final ArrayList<Method> foundMethods = new ArrayList<Method>();
+        for (final Method method : methods) {
+            // Ensure the method return and parameter types can be resolved.
+            try {
+                method.getReturnType();
+                method.getParameterTypes();
+            } catch (NoClassDefFoundError e) {
+                continue;
+            }
+
             if (method.getParameterTypes().length == 0 &&
                     method.isAnnotationPresent(ExportedProperty.class) &&
                     method.getReturnType() != Void.class) {

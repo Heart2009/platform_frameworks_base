@@ -20,12 +20,12 @@
 #include <sys/mount.h>
 #include <linux/fs.h>
 
-#include <grp.h>
 #include <fcntl.h>
+#include <grp.h>
+#include <inttypes.h>
 #include <paths.h>
 #include <signal.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <sys/capability.h>
 #include <sys/personality.h>
 #include <sys/prctl.h>
@@ -34,7 +34,7 @@
 #include <sys/types.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
-
+#include <unistd.h>
 
 #include <cutils/fs.h>
 #include <cutils/multiuser.h>
@@ -44,7 +44,7 @@
 #include <selinux/android.h>
 #include <processgroup/processgroup.h>
 
-#include "android_runtime/AndroidRuntime.h"
+#include "core_jni_helpers.h"
 #include "JNIHelp.h"
 #include "ScopedLocalRef.h"
 #include "ScopedPrimitiveArray.h"
@@ -104,7 +104,7 @@ static void SigChldHandler(int /*signal_number*/) {
     // so that it is restarted by init and system server will be restarted
     // from there.
     if (pid == gSystemServerPid) {
-      ALOGE("Exit zygote because system server (%d) has terminated");
+      ALOGE("Exit zygote because system server (%d) has terminated", pid);
       kill(getpid(), SIGKILL);
     }
   }
@@ -189,7 +189,8 @@ static void SetRLimits(JNIEnv* env, jobjectArray javaRlimits) {
 
     int rc = setrlimit(javaRlimit[0], &rlim);
     if (rc == -1) {
-      ALOGE("setrlimit(%d, {%d, %d}) failed", javaRlimit[0], rlim.rlim_cur, rlim.rlim_max);
+      ALOGE("setrlimit(%d, {%ld, %ld}) failed", javaRlimit[0], rlim.rlim_cur,
+            rlim.rlim_max);
       RuntimeAbort(env);
     }
   }
@@ -235,7 +236,7 @@ static void SetCapabilities(JNIEnv* env, int64_t permitted, int64_t effective) {
   capdata[1].permitted = permitted >> 32;
 
   if (capset(&capheader, &capdata[0]) == -1) {
-    ALOGE("capset(%lld, %lld) failed", permitted, effective);
+    ALOGE("capset(%" PRId64 ", %" PRId64 ") failed", permitted, effective);
     RuntimeAbort(env);
   }
 }
@@ -612,15 +613,11 @@ static JNINativeMethod gMethods[] = {
 };
 
 int register_com_android_internal_os_Zygote(JNIEnv* env) {
-  gZygoteClass = (jclass) env->NewGlobalRef(env->FindClass(kZygoteClassName));
-  if (gZygoteClass == NULL) {
-    RuntimeAbort(env);
-  }
-  gCallPostForkChildHooks = env->GetStaticMethodID(gZygoteClass, "callPostForkChildHooks",
+  gZygoteClass = MakeGlobalRefOrDie(env, FindClassOrDie(env, kZygoteClassName));
+  gCallPostForkChildHooks = GetStaticMethodIDOrDie(env, gZygoteClass, "callPostForkChildHooks",
                                                    "(ILjava/lang/String;)V");
 
-  return AndroidRuntime::registerNativeMethods(env, "com/android/internal/os/Zygote",
-      gMethods, NELEM(gMethods));
+  return RegisterMethodsOrDie(env, "com/android/internal/os/Zygote", gMethods, NELEM(gMethods));
 }
 }  // namespace android
 

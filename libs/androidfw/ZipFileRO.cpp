@@ -34,14 +34,6 @@
 #include <assert.h>
 #include <unistd.h>
 
-/*
- * We must open binary files using open(path, ... | O_BINARY) under Windows.
- * Otherwise strange read errors will happen.
- */
-#ifndef O_BINARY
-#  define O_BINARY  0
-#endif
-
 using namespace android;
 
 class _ZipEntryRO {
@@ -208,7 +200,7 @@ FileMap* ZipFileRO::createEntryFileMap(ZipEntryRO entry) const
 
     FileMap* newMap = new FileMap();
     if (!newMap->create(mFileName, fd, ze.offset, actualLen, true)) {
-        newMap->release();
+        delete newMap;
         return NULL;
     }
 

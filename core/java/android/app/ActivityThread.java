@@ -44,7 +44,10 @@ import android.database.sqlite.SQLiteDebug.DbStats;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.hardware.display.DisplayManagerGlobal;
+import android.net.ConnectivityManager;
 import android.net.IConnectivityManager;
+import android.net.LinkProperties;
+import android.net.Network;
 import android.net.Proxy;
 import android.net.ProxyInfo;
 import android.net.Uri;
@@ -60,6 +63,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
 import android.os.MessageQueue;
+import android.os.Parcel;
 import android.os.ParcelFileDescriptor;
 import android.os.PersistableBundle;
 import android.os.Process;
@@ -71,6 +75,7 @@ import android.os.SystemProperties;
 import android.os.Trace;
 import android.os.UserHandle;
 import android.provider.Settings;
+import android.security.NetworkSecurityPolicy;
 import android.util.AndroidRuntimeException;
 import android.util.ArrayMap;
 import android.util.DisplayMetrics;
@@ -83,6 +88,8 @@ import android.util.Slog;
 import android.util.SuperNotCalledException;
 import android.view.Display;
 import android.view.HardwareRenderer;
+import android.view.IWindowManager;
+import android.view.IWindowSessionCallback;
 import android.view.View;
 import android.view.ViewDebug;
 import android.view.ViewManager;
@@ -90,10 +97,11 @@ import android.view.ViewRootImpl;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.WindowManagerGlobal;
-import android.renderscript.RenderScript;
+import android.renderscript.RenderScriptCacheDir;
 import android.security.AndroidKeyStoreProvider;
 
 import com.android.internal.app.IVoiceInteractor;
+import com.android.internal.content.ReferrerIntent;
 import com.android.internal.os.BinderInternal;
 import com.android.internal.os.RuntimeInit;
 import com.android.internal.os.SamplingProfilerIntegration;
@@ -117,7 +125,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TimeZone;
-import java.util.regex.Pattern;
 
 import libcore.io.DropBox;
 import libcore.io.EventLogger;
@@ -156,10 +163,16 @@ public final class ActivityThread {
     private static final boolean DEBUG_MEMORY_TRIM = false;
     private static final boolean DEBUG_PROVIDER = false;
     private static final long MIN_TIME_BETWEEN_GCS = 5*1000;
-    private static final Pattern PATTERN_SEMICOLON = Pattern.compile(";");
     private static final int SQLITE_MEM_RELEASED_EVENT_LOG_TAG = 75003;
     private static final int LOG_ON_PAUSE_CALLED = 30021;
     private static final int LOG_ON_RESUME_CALLED = 30022;
+
+    /** Type for IActivityManager.serviceDoneExecuting: anonymous operation */
+    public static final int SERVICE_DONE_EXECUTING_ANON = 0;
+    /** Type for IActivityManager.serviceDoneExecuting: done with an onStart call */
+    public static final int SERVICE_DONE_EXECUTING_START = 1;
+    /** Type for IActivityManager.serviceDoneExecuting: done stopping (destroying) service */
+    public static final int SERVICE_DONE_EXECUTING_STOP = 2;
 
     private ContextImpl mSystemContext;
 
@@ -244,18 +257,23 @@ public final class ActivityThread {
         }
     }
 
+    static final class AcquiringProviderRecord {
+        IActivityManager.ContentProviderHolder holder;
+        boolean acquiring = true;
+        int requests = 1;
+        // Set if there was a runtime exception when trying to acquire the provider.
+        RuntimeException runtimeException = null;
+    }
+
     // The lock of mProviderMap protects the following variables.
-    final ArrayMap<ProviderKey, ProviderClientRecord> mProviderMap
-        = new ArrayMap<ProviderKey, ProviderClientRecord>();
-    final ArrayMap<IBinder, ProviderRefCount> mProviderRefCountMap
-        = new ArrayMap<IBinder, ProviderRefCount>();
-    final ArrayMap<IBinder, ProviderClientRecord> mLocalProviders
-        = new ArrayMap<IBinder, ProviderClientRecord>();
-    final ArrayMap<ComponentName, ProviderClientRecord> mLocalProvidersByName
-            = new ArrayMap<ComponentName, ProviderClientRecord>();
+    final ArrayMap<ProviderKey, ProviderClientRecord> mProviderMap = new ArrayMap<>();
+    final ArrayMap<ProviderKey, AcquiringProviderRecord> mAcquiringProviderMap = new ArrayMap<>();
+    final ArrayMap<IBinder, ProviderRefCount> mProviderRefCountMap = new ArrayMap<>();
+    final ArrayMap<IBinder, ProviderClientRecord> mLocalProviders = new ArrayMap<>();
+    final ArrayMap<ComponentName, ProviderClientRecord> mLocalProvidersByName = new ArrayMap<>();
 
     final ArrayMap<Activity, ArrayList<OnActivityPausedListener>> mOnPauseListeners
-        = new ArrayMap<Activity, ArrayList<OnActivityPausedListener>>();
+            = new ArrayMap<>();
 
     final GcIdler mGcIdler = new GcIdler();
     boolean mGcIdlerScheduled = false;
@@ -268,6 +286,7 @@ public final class ActivityThread {
         IBinder token;
         int ident;
         Intent intent;
+        String referrer;
         IVoiceInteractor voiceInteractor;
         Bundle state;
         PersistableBundle persistentState;
@@ -290,7 +309,7 @@ public final class ActivityThread {
         LoadedApk packageInfo;
 
         List<ResultInfo> pendingResults;
-        List<Intent> pendingIntents;
+        List<ReferrerIntent> pendingIntents;
 
         boolean startsNotResumed;
         boolean isForward;
@@ -331,7 +350,7 @@ public final class ActivityThread {
         }
     }
 
-    final class ProviderClientRecord {
+    static final class ProviderClientRecord {
         final String[] mNames;
         final IContentProvider mProvider;
         final ContentProvider mLocalProvider;
@@ -348,7 +367,7 @@ public final class ActivityThread {
     }
 
     static final class NewIntentData {
-        List<Intent> intents;
+        List<ReferrerIntent> intents;
         IBinder token;
         public String toString() {
             return "NewIntentData{intents=" + intents + " token=" + token + "}";
@@ -359,7 +378,7 @@ public final class ActivityThread {
         public ReceiverData(Intent intent, int resultCode, String resultData, Bundle resultExtras,
                 boolean ordered, boolean sticky, IBinder token, int sendingUser) {
             super(resultCode, resultData, resultExtras, TYPE_COMPONENT, ordered, sticky,
-                    token, sendingUser);
+                    token, sendingUser, intent.getFlags());
             this.intent = intent;
         }
 
@@ -605,9 +624,9 @@ public final class ActivityThread {
         // activity itself back to the activity manager. (matters more with ipc)
         public final void scheduleLaunchActivity(Intent intent, IBinder token, int ident,
                 ActivityInfo info, Configuration curConfig, CompatibilityInfo compatInfo,
-                IVoiceInteractor voiceInteractor, int procState, Bundle state,
+                String referrer, IVoiceInteractor voiceInteractor, int procState, Bundle state,
                 PersistableBundle persistentState, List<ResultInfo> pendingResults,
-                List<Intent> pendingNewIntents, boolean notResumed, boolean isForward,
+                List<ReferrerIntent> pendingNewIntents, boolean notResumed, boolean isForward,
                 ProfilerInfo profilerInfo) {
 
             updateProcessState(procState, false);
@@ -617,6 +636,7 @@ public final class ActivityThread {
             r.token = token;
             r.ident = ident;
             r.intent = intent;
+            r.referrer = referrer;
             r.voiceInteractor = voiceInteractor;
             r.activityInfo = info;
             r.compatInfo = compatInfo;
@@ -637,13 +657,13 @@ public final class ActivityThread {
         }
 
         public final void scheduleRelaunchActivity(IBinder token,
-                List<ResultInfo> pendingResults, List<Intent> pendingNewIntents,
+                List<ResultInfo> pendingResults, List<ReferrerIntent> pendingNewIntents,
                 int configChanges, boolean notResumed, Configuration config) {
             requestRelaunchActivity(token, pendingResults, pendingNewIntents,
                     configChanges, notResumed, config, true);
         }
 
-        public final void scheduleNewIntent(List<Intent> intents, IBinder token) {
+        public final void scheduleNewIntent(List<ReferrerIntent> intents, IBinder token) {
             NewIntentData data = new NewIntentData();
             data.intents = intents;
             data.token = token;
@@ -833,7 +853,13 @@ public final class ActivityThread {
         }
 
         public void setHttpProxy(String host, String port, String exclList, Uri pacFileUrl) {
-            Proxy.setHttpProxySystemProperty(host, port, exclList, pacFileUrl);
+            final Network network = ConnectivityManager.getProcessDefaultNetwork();
+            if (network != null) {
+                Proxy.setHttpProxySystemProperty(
+                        ConnectivityManager.from(getSystemContext()).getDefaultProxy());
+            } else {
+                Proxy.setHttpProxySystemProperty(host, port, exclList, pacFileUrl);
+            }
         }
 
         public void processInBackground() {
@@ -962,6 +988,8 @@ public final class ActivityThread {
             int binderLocalObjectCount = Debug.getBinderLocalObjectCount();
             int binderProxyObjectCount = Debug.getBinderProxyObjectCount();
             int binderDeathObjectCount = Debug.getBinderDeathObjectCount();
+            long parcelSize = Parcel.getGlobalAllocSize();
+            long parcelCount = Parcel.getGlobalAllocCount();
             long openSslSocketCount = Debug.countInstancesOfClass(OpenSSLSocketImpl.class);
             SQLiteDebug.PagerStats stats = SQLiteDebug.getDatabaseInfo();
 
@@ -1020,9 +1048,10 @@ public final class ActivityThread {
 
             printRow(pw, TWO_COUNT_COLUMNS, "Local Binders:", binderLocalObjectCount,
                     "Proxy Binders:", binderProxyObjectCount);
-            printRow(pw, ONE_COUNT_COLUMN, "Death Recipients:", binderDeathObjectCount);
-
-            printRow(pw, ONE_COUNT_COLUMN, "OpenSSL Sockets:", openSslSocketCount);
+            printRow(pw, TWO_COUNT_COLUMNS, "Parcel memory:", parcelSize/1024,
+                    "Parcel count:", parcelCount);
+            printRow(pw, TWO_COUNT_COLUMNS, "Death Recipients:", binderDeathObjectCount,
+                    "OpenSSL Sockets:", openSslSocketCount);
 
             // SQLite mem info
             pw.println(" ");
@@ -1061,12 +1090,27 @@ public final class ActivityThread {
             WindowManagerGlobal.getInstance().dumpGfxInfo(fd);
         }
 
-        @Override
-        public void dumpDbInfo(FileDescriptor fd, String[] args) {
+        private void dumpDatabaseInfo(FileDescriptor fd, String[] args) {
             PrintWriter pw = new FastPrintWriter(new FileOutputStream(fd));
             PrintWriterPrinter printer = new PrintWriterPrinter(pw);
             SQLiteDebug.dump(printer, args);
             pw.flush();
+        }
+
+        @Override
+        public void dumpDbInfo(final FileDescriptor fd, final String[] args) {
+            if (mSystemThread) {
+                // Ensure this invocation is asynchronous to prevent
+                // writer waiting due to buffer cannot be consumed.
+                AsyncTask.THREAD_POOL_EXECUTOR.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        dumpDatabaseInfo(fd, args);
+                    }
+                });
+            } else {
+                dumpDatabaseInfo(fd, args);
+            }
         }
 
         @Override
@@ -1153,8 +1197,16 @@ public final class ActivityThread {
             sendMessage(H.BACKGROUND_VISIBLE_BEHIND_CHANGED, token, visible ? 1 : 0);
         }
 
+        @Override
         public void scheduleEnterAnimationComplete(IBinder token) {
             sendMessage(H.ENTER_ANIMATION_COMPLETE, token);
+        }
+
+        @Override
+        public void notifyCleartextNetwork(byte[] firstPacket) {
+            if (StrictMode.vmCleartextNetworkEnabled()) {
+                StrictMode.onCleartextNetworkDetected(firstPacket);
+            }
         }
     }
 
@@ -1742,6 +1794,12 @@ public final class ActivityThread {
                     new LoadedApk(this, aInfo, compatInfo, baseLoader,
                             securityViolation, includeCode &&
                             (aInfo.flags&ApplicationInfo.FLAG_HAS_CODE) != 0, registerPackage);
+
+                if (mSystemThread && "android".equals(aInfo.packageName)) {
+                    packageInfo.installSystemApplicationInfo(aInfo,
+                            getSystemContext().mPackageInfo.getClassLoader());
+                }
+
                 if (includeCode) {
                     mPackages.put(aInfo.packageName,
                             new WeakReference<LoadedApk>(packageInfo));
@@ -1801,10 +1859,6 @@ public final class ActivityThread {
     public void installSystemApplicationInfo(ApplicationInfo info, ClassLoader classLoader) {
         synchronized (this) {
             getSystemContext().installSystemApplicationInfo(info, classLoader);
-
-            // The code package for "android" in the system server needs
-            // to be the system context's package.
-            mPackages.put("android", new WeakReference<LoadedApk>(getSystemContext().mPackageInfo));
 
             // give ourselves a default profiler
             mProfiler = new Profiler();
@@ -2232,7 +2286,7 @@ public final class ActivityThread {
                 activity.attach(appContext, this, getInstrumentation(), r.token,
                         r.ident, app, r.intent, r.activityInfo, title, r.parent,
                         r.embeddedID, r.lastNonConfigurationInstances, config,
-                        r.voiceInteractor);
+                        r.referrer, r.voiceInteractor);
 
                 if (customIntent != null) {
                     activity.mIntent = customIntent;
@@ -2357,6 +2411,9 @@ public final class ActivityThread {
         if (localLOGV) Slog.v(
             TAG, "Handling launch of " + r);
 
+        // Initialize before creating the activity
+        WindowManagerGlobal.initialize();
+
         Activity a = performLaunchActivity(r, customIntent);
 
         if (a != null) {
@@ -2419,11 +2476,10 @@ public final class ActivityThread {
         }
     }
 
-    private void deliverNewIntents(ActivityClientRecord r,
-            List<Intent> intents) {
+    private void deliverNewIntents(ActivityClientRecord r, List<ReferrerIntent> intents) {
         final int N = intents.size();
         for (int i=0; i<N; i++) {
-            Intent intent = intents.get(i);
+            ReferrerIntent intent = intents.get(i);
             intent.setExtrasClassLoader(r.activity.getClassLoader());
             intent.prepareToEnterProcess();
             r.activity.mFragments.noteStateNotSaved();
@@ -2431,8 +2487,7 @@ public final class ActivityThread {
         }
     }
 
-    public final void performNewIntents(IBinder token,
-            List<Intent> intents) {
+    public final void performNewIntents(IBinder token, List<ReferrerIntent> intents) {
         ActivityClientRecord r = mActivities.get(token);
         if (r != null) {
             final boolean resumed = !r.paused;
@@ -2513,13 +2568,18 @@ public final class ActivityThread {
     }
 
     public void handleInstallProvider(ProviderInfo info) {
-        installContentProviders(mInitialApplication, Lists.newArrayList(info));
+        final StrictMode.ThreadPolicy oldPolicy = StrictMode.allowThreadDiskWrites();
+        try {
+            installContentProviders(mInitialApplication, Lists.newArrayList(info));
+        } finally {
+            StrictMode.setThreadPolicy(oldPolicy);
+        }
     }
 
     private void handleEnterAnimationComplete(IBinder token) {
         ActivityClientRecord r = mActivities.get(token);
         if (r != null) {
-            r.activity.onEnterAnimationComplete();
+            r.activity.dispatchEnterAnimationComplete();
         }
     }
 
@@ -2732,7 +2792,7 @@ public final class ActivityThread {
             mServices.put(data.token, service);
             try {
                 ActivityManagerNative.getDefault().serviceDoneExecuting(
-                        data.token, 0, 0, 0);
+                        data.token, SERVICE_DONE_EXECUTING_ANON, 0, 0);
             } catch (RemoteException e) {
                 // nothing to do.
             }
@@ -2761,7 +2821,7 @@ public final class ActivityThread {
                     } else {
                         s.onRebind(data.intent);
                         ActivityManagerNative.getDefault().serviceDoneExecuting(
-                                data.token, 0, 0, 0);
+                                data.token, SERVICE_DONE_EXECUTING_ANON, 0, 0);
                     }
                     ensureJitEnabled();
                 } catch (RemoteException ex) {
@@ -2789,7 +2849,7 @@ public final class ActivityThread {
                                 data.token, data.intent, doRebind);
                     } else {
                         ActivityManagerNative.getDefault().serviceDoneExecuting(
-                                data.token, 0, 0, 0);
+                                data.token, SERVICE_DONE_EXECUTING_ANON, 0, 0);
                     }
                 } catch (RemoteException ex) {
                 }
@@ -2871,7 +2931,7 @@ public final class ActivityThread {
 
                 try {
                     ActivityManagerNative.getDefault().serviceDoneExecuting(
-                            data.token, 1, data.startId, res);
+                            data.token, SERVICE_DONE_EXECUTING_START, data.startId, res);
                 } catch (RemoteException e) {
                     // nothing to do.
                 }
@@ -2902,9 +2962,11 @@ public final class ActivityThread {
 
                 try {
                     ActivityManagerNative.getDefault().serviceDoneExecuting(
-                            token, 0, 0, 0);
+                            token, SERVICE_DONE_EXECUTING_STOP, 0, 0);
                 } catch (RemoteException e) {
                     // nothing to do.
+                    Slog.i(TAG, "handleStopService: unable to execute serviceDoneExecuting for "
+                            + token, e);
                 }
             } catch (Exception e) {
                 if (!mInstrumentation.onException(s, e)) {
@@ -2912,7 +2974,10 @@ public final class ActivityThread {
                             "Unable to stop service " + s
                             + ": " + e.toString(), e);
                 }
+                Slog.i(TAG, "handleStopService: exception for " + token, e);
             }
+        } else {
+            Slog.i(TAG, "handleStopService: token=" + token + " not found.");
         }
         //Slog.i(TAG, "Running services: " + mServices);
     }
@@ -3124,7 +3189,7 @@ public final class ActivityThread {
                 if (cv == null) {
                     mThumbnailCanvas = cv = new Canvas();
                 }
-    
+
                 cv.setBitmap(thumbnail);
                 if (!r.activity.onCreateThumbnail(thumbnail, cv)) {
                     mAvailThumbnailBitmap = thumbnail;
@@ -3422,12 +3487,12 @@ public final class ActivityThread {
 
     private void handleWindowVisibility(IBinder token, boolean show) {
         ActivityClientRecord r = mActivities.get(token);
-        
+
         if (r == null) {
             Log.w(TAG, "handleWindowVisibility: no activity for token " + token);
             return;
         }
-        
+
         if (!show && !r.stopped) {
             performStopActivityInner(r, null, show, false);
         } else if (show && r.stopped) {
@@ -3745,7 +3810,7 @@ public final class ActivityThread {
     }
 
     public final void requestRelaunchActivity(IBinder token,
-            List<ResultInfo> pendingResults, List<Intent> pendingNewIntents,
+            List<ResultInfo> pendingResults, List<ReferrerIntent> pendingNewIntents,
             int configChanges, boolean notResumed, Configuration config,
             boolean fromServer) {
         ActivityClientRecord target = null;
@@ -3855,10 +3920,10 @@ public final class ActivityThread {
                 }
             }
         }
-        
+
         if (DEBUG_CONFIGURATION) Slog.v(TAG, "Relaunching activity "
                 + tmp.token + ": changedConfig=" + changedConfig);
-        
+
         // If there was a pending configuration change, execute it first.
         if (changedConfig != null) {
             mCurDefaultDisplayDpi = changedConfig.densityDpi;
@@ -4055,7 +4120,7 @@ public final class ActivityThread {
             if (config == null) {
                 return;
             }
-            
+
             if (DEBUG_CONFIGURATION) Slog.v(TAG, "Handle configuration changed: "
                     + config);
 
@@ -4103,7 +4168,7 @@ public final class ActivityThread {
 
         if (DEBUG_CONFIGURATION) Slog.v(TAG, "Handle activity config changed: "
                 + r.activityInfo.name);
-        
+
         performConfigurationChanged(r.activity, mCompatConfiguration);
 
         freeTextLayoutCachesIfNeeded(r.activity.mCurrentConfig.diff(mCompatConfiguration));
@@ -4161,28 +4226,30 @@ public final class ActivityThread {
     final void handleDispatchPackageBroadcast(int cmd, String[] packages) {
         boolean hasPkgInfo = false;
         if (packages != null) {
-            for (int i=packages.length-1; i>=0; i--) {
-                //Slog.i(TAG, "Cleaning old package: " + packages[i]);
-                if (!hasPkgInfo) {
-                    WeakReference<LoadedApk> ref;
-                    ref = mPackages.get(packages[i]);
-                    if (ref != null && ref.get() != null) {
-                        hasPkgInfo = true;
-                    } else {
-                        ref = mResourcePackages.get(packages[i]);
+            synchronized (mResourcesManager) {
+                for (int i=packages.length-1; i>=0; i--) {
+                    //Slog.i(TAG, "Cleaning old package: " + packages[i]);
+                    if (!hasPkgInfo) {
+                        WeakReference<LoadedApk> ref;
+                        ref = mPackages.get(packages[i]);
                         if (ref != null && ref.get() != null) {
                             hasPkgInfo = true;
+                        } else {
+                            ref = mResourcePackages.get(packages[i]);
+                            if (ref != null && ref.get() != null) {
+                                hasPkgInfo = true;
+                            }
                         }
                     }
+                    mPackages.remove(packages[i]);
+                    mResourcePackages.remove(packages[i]);
                 }
-                mPackages.remove(packages[i]);
-                mResourcePackages.remove(packages[i]);
             }
         }
         ApplicationPackageManager.handlePackageBroadcast(cmd, packages,
                 hasPkgInfo);
     }
-        
+
     final void handleLowMemory() {
         ArrayList<ComponentCallbacks2> callbacks = collectComponentCallbacks(true, null);
 
@@ -4229,10 +4296,10 @@ public final class ActivityThread {
             String[] packages = getPackageManager().getPackagesForUid(uid);
 
             // If there are several packages in this application we won't
-            // initialize the graphics disk caches 
+            // initialize the graphics disk caches
             if (packages != null && packages.length == 1) {
                 HardwareRenderer.setupDiskCache(cacheDir);
-                RenderScript.setupDiskCache(cacheDir);
+                RenderScriptCacheDir.setupDiskCache(cacheDir);
             }
         } catch (RemoteException e) {
             // Ignore
@@ -4333,10 +4400,16 @@ public final class ActivityThread {
             if (cacheDir != null) {
                 // Provide a usable directory for temporary files
                 System.setProperty("java.io.tmpdir", cacheDir.getAbsolutePath());
-    
-                setupGraphicsSupport(data.info, cacheDir);
             } else {
-                Log.e(TAG, "Unable to setupGraphicsSupport due to missing cache directory");
+                Log.v(TAG, "Unable to initialize \"java.io.tmpdir\" property due to missing cache directory");
+            }
+
+            // Use codeCacheDir to store generated/compiled graphics code
+            final File codeCacheDir = appContext.getCodeCacheDir();
+            if (codeCacheDir != null) {
+                setupGraphicsSupport(data.info, codeCacheDir);
+            } else {
+                Log.e(TAG, "Unable to setupGraphicsSupport due to missing code-cache directory");
             }
         }
 
@@ -4367,6 +4440,9 @@ public final class ActivityThread {
         if (data.appInfo.targetSdkVersion > 9) {
             StrictMode.enableDeathOnNetwork();
         }
+
+        NetworkSecurityPolicy.getInstance().setCleartextTrafficPermitted(
+                (data.appInfo.flags & ApplicationInfo.FLAG_USES_CLEARTEXT_TRAFFIC) != 0);
 
         if (data.debugMode != IApplicationThread.DEBUG_OFF) {
             // XXX should have option to change the port.
@@ -4413,7 +4489,7 @@ public final class ActivityThread {
             // crash if we can't get it.
             IConnectivityManager service = IConnectivityManager.Stub.asInterface(b);
             try {
-                ProxyInfo proxyInfo = service.getProxy();
+                final ProxyInfo proxyInfo = service.getDefaultProxy();
                 Proxy.setHttpProxySystemProperty(proxyInfo);
             } catch (RemoteException e) {}
         }
@@ -4479,6 +4555,10 @@ public final class ActivityThread {
 
         if ((data.appInfo.flags&ApplicationInfo.FLAG_LARGE_HEAP) != 0) {
             dalvik.system.VMRuntime.getRuntime().clearGrowthLimit();
+        } else {
+            // Small heap, clamp to the current growth limit and let the heap release
+            // pages after the growth limit to the non growth limit capacity. b/18387825
+            dalvik.system.VMRuntime.getRuntime().clampGrowthLimit();
         }
 
         // Allow disk access during application and provider setup. This could
@@ -4573,23 +4653,74 @@ public final class ActivityThread {
 
     public final IContentProvider acquireProvider(
             Context c, String auth, int userId, boolean stable) {
-        final IContentProvider provider = acquireExistingProvider(c, auth, userId, stable);
+        final ProviderKey key = new ProviderKey(auth, userId);
+        final IContentProvider provider = acquireExistingProvider(c, key, stable);
         if (provider != null) {
             return provider;
         }
+        AcquiringProviderRecord r;
+        boolean first = false;
+        synchronized (mAcquiringProviderMap) {
+            r = mAcquiringProviderMap.get(key);
+            if (r == null) {
+                r = new AcquiringProviderRecord();
+                mAcquiringProviderMap.put(key, r);
+                first = true;
+            } else {
+                r.requests++;
+            }
+        }
 
-        // There is a possible race here.  Another thread may try to acquire
-        // the same provider at the same time.  When this happens, we want to ensure
-        // that the first one wins.
-        // Note that we cannot hold the lock while acquiring and installing the
-        // provider since it might take a long time to run and it could also potentially
-        // be re-entrant in the case where the provider is in the same process.
         IActivityManager.ContentProviderHolder holder = null;
         try {
-            holder = ActivityManagerNative.getDefault().getContentProvider(
-                    getApplicationThread(), auth, userId, stable);
+            if (first) {
+                // Multiple threads may try to acquire the same provider at the same time.
+                // When this happens, we only let the first one really gets provider.
+                // Other threads just wait for its result.
+                // Note that we cannot hold the lock while acquiring and installing the
+                // provider since it might take a long time to run and it could also potentially
+                // be re-entrant in the case where the provider is in the same process.
+                holder = ActivityManagerNative.getDefault().getContentProvider(
+                        getApplicationThread(), auth, userId, stable);
+            } else {
+                synchronized (r) {
+                    while (r.acquiring) {
+                        try {
+                            r.wait();
+                        } catch (InterruptedException e) {
+                        }
+                    }
+                    holder = r.holder;
+                }
+            }
         } catch (RemoteException ex) {
+        } catch (RuntimeException e) {
+            synchronized (r) {
+                r.runtimeException = e;
+            }
+        } finally {
+            if (first) {
+                synchronized (r) {
+                    r.holder = holder;
+                    r.acquiring = false;
+                    r.notifyAll();
+                }
+            }
+
+            synchronized (mAcquiringProviderMap) {
+                if (--r.requests == 0) {
+                    mAcquiringProviderMap.remove(key);
+                }
+            }
+
+            if (r.runtimeException != null) {
+                // Was set when the first thread tried to acquire the provider,
+                // but we should make sure it is thrown for all threads trying to
+                // acquire the provider.
+                throw r.runtimeException;
+            }
         }
+
         if (holder == null) {
             Slog.e(TAG, "Failed to find provider info for " + auth);
             return null;
@@ -4672,8 +4803,12 @@ public final class ActivityThread {
 
     public final IContentProvider acquireExistingProvider(
             Context c, String auth, int userId, boolean stable) {
+        return acquireExistingProvider(c, new ProviderKey(auth, userId), stable);
+    }
+
+    final IContentProvider acquireExistingProvider(
+            Context c, ProviderKey key, boolean stable) {
         synchronized (mProviderMap) {
-            final ProviderKey key = new ProviderKey(auth, userId);
             final ProviderClientRecord pr = mProviderMap.get(key);
             if (pr == null) {
                 return null;
@@ -4684,7 +4819,7 @@ public final class ActivityThread {
             if (!jBinder.isBinderAlive()) {
                 // The hosting process of the provider has died; we can't
                 // use this one.
-                Log.i(TAG, "Acquiring provider " + auth + " for user " + userId
+                Log.i(TAG, "Acquiring provider " + key.authority + " for user " +  key.userId
                         + ": existing object's process dead");
                 handleUnstableProviderDiedLocked(jBinder, true);
                 return null;
@@ -4883,7 +5018,7 @@ public final class ActivityThread {
 
     private ProviderClientRecord installProviderAuthoritiesLocked(IContentProvider provider,
             ContentProvider localProvider, IActivityManager.ContentProviderHolder holder) {
-        final String auths[] = PATTERN_SEMICOLON.split(holder.info.authority);
+        final String auths[] = holder.info.authority.split(";");
         final int userId = UserHandle.getUserId(holder.info.applicationInfo.uid);
 
         final ProviderClientRecord pcr = new ProviderClientRecord(
@@ -5006,18 +5141,12 @@ public final class ActivityThread {
                     if (DEBUG_PROVIDER) {
                         Slog.v(TAG, "installProvider: lost the race, updating ref count");
                     }
-                    // We need to transfer our new reference to the existing
-                    // ref count, releasing the old one...  but only if
-                    // release is needed (that is, it is not running in the
-                    // system process).
+                    // The provider has already been installed, so we need
+                    // to increase reference count to the existing one, but
+                    // only if release is needed (that is, it is not running
+                    // in the system process or local to the process).
                     if (!noReleaseNeeded) {
                         incProviderRefLocked(prc, stable);
-                        try {
-                            ActivityManagerNative.getDefault().removeContentProvider(
-                                    holder.connection, stable);
-                        } catch (RemoteException e) {
-                            //do nothing content provider object is dead any way
-                        }
                     }
                 } else {
                     ProviderClientRecord client = installProviderAuthoritiesLocked(
@@ -5111,7 +5240,7 @@ public final class ActivityThread {
                         if (mPendingConfiguration == null ||
                                 mPendingConfiguration.isOtherSeqNewer(newConfig)) {
                             mPendingConfiguration = newConfig;
-                            
+
                             sendMessage(H.CONFIGURATION_CHANGED, newConfig);
                         }
                     }
@@ -5210,8 +5339,6 @@ public final class ActivityThread {
         if (sMainThreadHandler == null) {
             sMainThreadHandler = thread.getHandler();
         }
-
-        AsyncTask.init();
 
         if (false) {
             Looper.myLooper().setMessageLogging(new

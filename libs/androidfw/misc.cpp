@@ -22,9 +22,9 @@
 #include <androidfw/misc.h>
 
 #include <sys/stat.h>
-#include <string.h>
+#include <cstring>
 #include <errno.h>
-#include <stdio.h>
+#include <cstdio>
 
 using namespace android;
 
@@ -56,9 +56,11 @@ FileType getFileType(const char* fileName)
             return kFileTypeBlockDev;
         else if (S_ISFIFO(sb.st_mode))
             return kFileTypeFifo;
-#ifdef HAVE_SYMLINKS
+#if defined(S_ISLNK)
         else if (S_ISLNK(sb.st_mode))
             return kFileTypeSymlink;
+#endif
+#if defined(S_ISSOCK)
         else if (S_ISSOCK(sb.st_mode))
             return kFileTypeSocket;
 #endif

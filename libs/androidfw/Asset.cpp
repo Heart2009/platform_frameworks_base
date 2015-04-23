@@ -45,6 +45,8 @@ using namespace android;
 # define O_BINARY 0
 #endif
 
+static const bool kIsDebug = false;
+
 static Mutex gAssetLock;
 static int32_t gCount = 0;
 static Asset* gHead = NULL;
@@ -89,7 +91,9 @@ Asset::Asset(void)
         gTail->mNext = this;
         gTail = this;
     }
-    //ALOGI("Creating Asset %p #%d\n", this, gCount);
+    if (kIsDebug) {
+        ALOGI("Creating Asset %p #%d\n", this, gCount);
+    }
 }
 
 Asset::~Asset(void)
@@ -109,7 +113,9 @@ Asset::~Asset(void)
         mPrev->mNext = mNext;
     }
     mNext = mPrev = NULL;
-    //ALOGI("Destroying Asset in %p #%d\n", this, gCount);
+    if (kIsDebug) {
+        ALOGI("Destroying Asset in %p #%d\n", this, gCount);
+    }
 }
 
 /*
@@ -526,7 +532,7 @@ off64_t _FileAsset::seek(off64_t offset, int whence)
 void _FileAsset::close(void)
 {
     if (mMap != NULL) {
-        mMap->release();
+        delete mMap;
         mMap = NULL;
     }
     if (mBuf != NULL) {
@@ -606,7 +612,7 @@ const void* _FileAsset::getBuffer(bool wordAligned)
 
         map = new FileMap;
         if (!map->create(NULL, fileno(mFp), mStart, mLength, true)) {
-            map->release();
+            delete map;
             return NULL;
         }
 
@@ -821,7 +827,7 @@ off64_t _CompressedAsset::seek(off64_t offset, int whence)
 void _CompressedAsset::close(void)
 {
     if (mMap != NULL) {
-        mMap->release();
+        delete mMap;
         mMap = NULL;
     }
 

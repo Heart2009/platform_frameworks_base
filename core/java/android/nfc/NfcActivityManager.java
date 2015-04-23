@@ -18,12 +18,14 @@ package android.nfc;
 
 import android.app.Activity;
 import android.app.Application;
+import android.content.ContentProvider;
 import android.content.Intent;
 import android.net.Uri;
 import android.nfc.NfcAdapter.ReaderCallback;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.RemoteException;
+import android.os.UserHandle;
 import android.util.Log;
 
 import java.util.ArrayList;
@@ -44,7 +46,6 @@ public final class NfcActivityManager extends IAppCallback.Stub
     static final Boolean DBG = false;
 
     final NfcAdapter mAdapter;
-    final NfcEvent mDefaultEvent;  // cached NfcEvent (its currently always the same)
 
     // All objects in the lists are protected by this
     final List<NfcApplicationState> mApps;  // Application(s) that have NFC state. Usually one
@@ -198,7 +199,6 @@ public final class NfcActivityManager extends IAppCallback.Stub
         mAdapter = adapter;
         mActivities = new LinkedList<NfcActivityState>();
         mApps = new ArrayList<NfcApplicationState>(1);  // Android VM usually has 1 app
-        mDefaultEvent = new NfcEvent(mAdapter);
     }
 
     public void enableReaderMode(Activity activity, ReaderCallback callback, int flags,
@@ -252,7 +252,11 @@ public final class NfcActivityManager extends IAppCallback.Stub
             isResumed = state.resumed;
         }
         if (isResumed) {
+            // requestNfcServiceCallback() verifies permission also
             requestNfcServiceCallback();
+        } else {
+            // Crash API calls early in case NFC permission is missing
+            verifyNfcPermission();
         }
     }
 
@@ -266,7 +270,11 @@ public final class NfcActivityManager extends IAppCallback.Stub
             isResumed = state.resumed;
         }
         if (isResumed) {
+            // requestNfcServiceCallback() verifies permission also
             requestNfcServiceCallback();
+        } else {
+            // Crash API calls early in case NFC permission is missing
+            verifyNfcPermission();
         }
     }
 
@@ -279,7 +287,11 @@ public final class NfcActivityManager extends IAppCallback.Stub
             isResumed = state.resumed;
         }
         if (isResumed) {
+            // requestNfcServiceCallback() verifies permission also
             requestNfcServiceCallback();
+        } else {
+            // Crash API calls early in case NFC permission is missing
+            verifyNfcPermission();
         }
     }
 
@@ -293,7 +305,11 @@ public final class NfcActivityManager extends IAppCallback.Stub
             isResumed = state.resumed;
         }
         if (isResumed) {
+            // requestNfcServiceCallback() verifies permission also
             requestNfcServiceCallback();
+        } else {
+            // Crash API calls early in case NFC permission is missing
+            verifyNfcPermission();
         }
     }
 
@@ -306,7 +322,11 @@ public final class NfcActivityManager extends IAppCallback.Stub
             isResumed = state.resumed;
         }
         if (isResumed) {
+            // requestNfcServiceCallback() verifies permission also
             requestNfcServiceCallback();
+        } else {
+            // Crash API calls early in case NFC permission is missing
+            verifyNfcPermission();
         }
     }
 
@@ -322,15 +342,24 @@ public final class NfcActivityManager extends IAppCallback.Stub
         }
     }
 
+    void verifyNfcPermission() {
+        try {
+            NfcAdapter.sService.verifyNfcPermission();
+        } catch (RemoteException e) {
+            mAdapter.attemptDeadServiceRecovery(e);
+        }
+    }
+
     /** Callback from NFC service, usually on binder thread */
     @Override
-    public BeamShareData createBeamShareData() {
+    public BeamShareData createBeamShareData(byte peerLlcpVersion) {
         NfcAdapter.CreateNdefMessageCallback ndefCallback;
         NfcAdapter.CreateBeamUrisCallback urisCallback;
         NdefMessage message;
         Activity activity;
         Uri[] uris;
         int flags;
+        NfcEvent event = new NfcEvent(mAdapter, peerLlcpVersion);
         synchronized (NfcActivityManager.this) {
             NfcActivityState state = findResumedActivityState();
             if (state == null) return null;
@@ -345,24 +374,29 @@ public final class NfcActivityManager extends IAppCallback.Stub
 
         // Make callbacks without lock
         if (ndefCallback != null) {
-            message  = ndefCallback.createNdefMessage(mDefaultEvent);
+            message  = ndefCallback.createNdefMessage(event);
         }
         if (urisCallback != null) {
-            uris = urisCallback.createBeamUris(mDefaultEvent);
+            uris = urisCallback.createBeamUris(event);
             if (uris != null) {
+                ArrayList<Uri> validUris = new ArrayList<Uri>();
                 for (Uri uri : uris) {
                     if (uri == null) {
                         Log.e(TAG, "Uri not allowed to be null.");
-                        return null;
+                        continue;
                     }
                     String scheme = uri.getScheme();
                     if (scheme == null || (!scheme.equalsIgnoreCase("file") &&
                             !scheme.equalsIgnoreCase("content"))) {
                         Log.e(TAG, "Uri needs to have " +
                                 "either scheme file or scheme content");
-                        return null;
+                        continue;
                     }
+                    uri = ContentProvider.maybeAddUserId(uri, UserHandle.myUserId());
+                    validUris.add(uri);
                 }
+
+                uris = validUris.toArray(new Uri[validUris.size()]);
             }
         }
         if (uris != null && uris.length > 0) {
@@ -372,12 +406,12 @@ public final class NfcActivityManager extends IAppCallback.Stub
                         Intent.FLAG_GRANT_READ_URI_PERMISSION);
             }
         }
-        return new BeamShareData(message, uris, flags);
+        return new BeamShareData(message, uris, UserHandle.CURRENT, flags);
     }
 
     /** Callback from NFC service, usually on binder thread */
     @Override
-    public void onNdefPushComplete() {
+    public void onNdefPushComplete(byte peerLlcpVersion) {
         NfcAdapter.OnNdefPushCompleteCallback callback;
         synchronized (NfcActivityManager.this) {
             NfcActivityState state = findResumedActivityState();
@@ -385,10 +419,10 @@ public final class NfcActivityManager extends IAppCallback.Stub
 
             callback = state.onNdefPushCompleteCallback;
         }
-
+        NfcEvent event = new NfcEvent(mAdapter, peerLlcpVersion);
         // Make callback without lock
         if (callback != null) {
-            callback.onNdefPushComplete(mDefaultEvent);
+            callback.onNdefPushComplete(event);
         }
     }
 

@@ -66,6 +66,44 @@ public class Script extends BaseObj {
     }
 
     /**
+     * InvokeID is an identifier for an invoke function. It is used
+     * as an identifier for ScriptGroup creation.
+     *
+     * This class should not be directly created. Instead use the method in the
+     * reflected or intrinsic code "getInvokeID_funcname()".
+     *
+     */
+    public static final class InvokeID extends BaseObj {
+        Script mScript;
+        int mSlot;
+        InvokeID(long id, RenderScript rs, Script s, int slot) {
+            super(id, rs);
+            mScript = s;
+            mSlot = slot;
+        }
+    }
+
+    private final SparseArray<InvokeID> mIIDs = new SparseArray<InvokeID>();
+    /**
+     * Only to be used by generated reflected classes.
+     */
+    protected InvokeID createInvokeID(int slot) {
+        InvokeID i = mIIDs.get(slot);
+        if (i != null) {
+            return i;
+        }
+
+        long id = mRS.nScriptInvokeIDCreate(getID(mRS), slot);
+        if (id == 0) {
+            throw new RSDriverException("Failed to create KernelID");
+        }
+
+        i = new InvokeID(id, mRS, this, slot);
+        mIIDs.put(slot, i);
+        return i;
+    }
+
+    /**
      * FieldID is an identifier for a Script + exported field pair. It is used
      * as an identifier for ScriptGroup creation.
      *
@@ -199,8 +237,10 @@ public class Script extends BaseObj {
                            FieldPacker v, LaunchOptions sc) {
         // TODO: Is this necessary if nScriptForEach calls validate as well?
         mRS.validate();
-        for (Allocation ain : ains) {
-          mRS.validateObject(ain);
+        if (ains != null) {
+            for (Allocation ain : ains) {
+                mRS.validateObject(ain);
+            }
         }
         mRS.validateObject(aout);
 
@@ -209,9 +249,14 @@ public class Script extends BaseObj {
                 "At least one of ain or aout is required to be non-null.");
         }
 
-        long[] in_ids = new long[ains.length];
-        for (int index = 0; index < ains.length; ++index) {
-            in_ids[index] = ains[index].getID(mRS);
+        long[] in_ids;
+        if (ains != null) {
+            in_ids = new long[ains.length];
+            for (int index = 0; index < ains.length; ++index) {
+                in_ids[index] = ains[index].getID(mRS);
+            }
+        } else {
+            in_ids = null;
         }
 
         long out_id = 0;

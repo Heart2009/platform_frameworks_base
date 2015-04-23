@@ -18,8 +18,16 @@ package android.security;
 
 import com.android.org.conscrypt.NativeCrypto;
 
+import android.os.Binder;
+import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.ServiceManager;
+import android.security.keymaster.ExportResult;
+import android.security.keymaster.KeyCharacteristics;
+import android.security.keymaster.KeymasterArguments;
+import android.security.keymaster.KeymasterBlob;
+import android.security.keymaster.KeymasterDefs;
+import android.security.keymaster.OperationResult;
 import android.util.Log;
 
 import java.util.Locale;
@@ -58,6 +66,8 @@ public class KeyStore {
 
     private final IKeystoreService mBinder;
 
+    private IBinder mToken;
+
     private KeyStore(IKeystoreService binder) {
         mBinder = binder;
     }
@@ -68,15 +78,20 @@ public class KeyStore {
         return new KeyStore(keystore);
     }
 
-    static int getKeyTypeForAlgorithm(String keyType) throws IllegalArgumentException {
+    private synchronized IBinder getToken() {
+        if (mToken == null) {
+            mToken = new Binder();
+        }
+        return mToken;
+    }
+
+    static int getKeyTypeForAlgorithm(String keyType) {
         if ("RSA".equalsIgnoreCase(keyType)) {
             return NativeCrypto.EVP_PKEY_RSA;
-        } else if ("DSA".equalsIgnoreCase(keyType)) {
-            return NativeCrypto.EVP_PKEY_DSA;
         } else if ("EC".equalsIgnoreCase(keyType)) {
             return NativeCrypto.EVP_PKEY_EC;
         } else {
-            throw new IllegalArgumentException("Unsupported key type: " + keyType);
+            return -1;
         }
     }
 
@@ -207,7 +222,8 @@ public class KeyStore {
     public boolean generate(String key, int uid, int keyType, int keySize, int flags,
             byte[][] args) {
         try {
-            return mBinder.generate(key, uid, keyType, keySize, flags, args) == NO_ERROR;
+            return mBinder.generate(key, uid, keyType, keySize, flags,
+                    new KeystoreArguments(args)) == NO_ERROR;
         } catch (RemoteException e) {
             Log.w(TAG, "Cannot connect to keystore", e);
             return false;
@@ -363,5 +379,185 @@ public class KeyStore {
 
     public int getLastError() {
         return mError;
+    }
+
+    public boolean addRngEntropy(byte[] data) {
+        try {
+            return mBinder.addRngEntropy(data) == NO_ERROR;
+        } catch (RemoteException e) {
+            Log.w(TAG, "Cannot connect to keystore", e);
+            return false;
+        }
+    }
+
+    public int generateKey(String alias, KeymasterArguments args, byte[] entropy, int uid,
+            int flags, KeyCharacteristics outCharacteristics) {
+        try {
+            return mBinder.generateKey(alias, args, entropy, uid, flags, outCharacteristics);
+        } catch (RemoteException e) {
+            Log.w(TAG, "Cannot connect to keystore", e);
+            return SYSTEM_ERROR;
+        }
+    }
+
+    public int generateKey(String alias, KeymasterArguments args, byte[] entropy, int flags,
+            KeyCharacteristics outCharacteristics) {
+        return generateKey(alias, args, entropy, UID_SELF, flags, outCharacteristics);
+    }
+
+    public int getKeyCharacteristics(String alias, KeymasterBlob clientId, KeymasterBlob appId,
+            KeyCharacteristics outCharacteristics) {
+        try {
+            return mBinder.getKeyCharacteristics(alias, clientId, appId, outCharacteristics);
+        } catch (RemoteException e) {
+            Log.w(TAG, "Cannot connect to keystore", e);
+            return SYSTEM_ERROR;
+        }
+    }
+
+    public int importKey(String alias, KeymasterArguments args, int format, byte[] keyData,
+            int uid, int flags, KeyCharacteristics outCharacteristics) {
+        try {
+            return mBinder.importKey(alias, args, format, keyData, uid, flags,
+                    outCharacteristics);
+        } catch (RemoteException e) {
+            Log.w(TAG, "Cannot connect to keystore", e);
+            return SYSTEM_ERROR;
+        }
+    }
+
+    public int importKey(String alias, KeymasterArguments args, int format, byte[] keyData,
+            int flags, KeyCharacteristics outCharacteristics) {
+        return importKey(alias, args, format, keyData, UID_SELF, flags, outCharacteristics);
+    }
+
+    public ExportResult exportKey(String alias, int format, KeymasterBlob clientId,
+            KeymasterBlob appId) {
+        try {
+            return mBinder.exportKey(alias, format, clientId, appId);
+        } catch (RemoteException e) {
+            Log.w(TAG, "Cannot connect to keystore", e);
+            return null;
+        }
+    }
+
+    public OperationResult begin(String alias, int purpose, boolean pruneable,
+            KeymasterArguments args, byte[] entropy, KeymasterArguments outArgs) {
+        try {
+            return mBinder.begin(getToken(), alias, purpose, pruneable, args, entropy, outArgs);
+        } catch (RemoteException e) {
+            Log.w(TAG, "Cannot connect to keystore", e);
+            return null;
+        }
+    }
+
+    public OperationResult update(IBinder token, KeymasterArguments arguments, byte[] input) {
+        try {
+            return mBinder.update(token, arguments, input);
+        } catch (RemoteException e) {
+            Log.w(TAG, "Cannot connect to keystore", e);
+            return null;
+        }
+    }
+
+    public OperationResult finish(IBinder token, KeymasterArguments arguments, byte[] signature) {
+        try {
+            return mBinder.finish(token, arguments, signature);
+        } catch (RemoteException e) {
+            Log.w(TAG, "Cannot connect to keystore", e);
+            return null;
+        }
+    }
+
+    public int abort(IBinder token) {
+        try {
+            return mBinder.abort(token);
+        } catch (RemoteException e) {
+            Log.w(TAG, "Cannot connect to keystore", e);
+            return SYSTEM_ERROR;
+        }
+    }
+
+    /**
+     * Check if the operation referenced by {@code token} is currently authorized.
+     *
+     * @param token An operation token returned by a call to {@link KeyStore.begin}.
+     */
+    public boolean isOperationAuthorized(IBinder token) {
+        try {
+            return mBinder.isOperationAuthorized(token);
+        } catch (RemoteException e) {
+            Log.w(TAG, "Cannot connect to keystore", e);
+            return false;
+        }
+    }
+
+    /**
+     * Add an authentication record to the keystore authorization table.
+     *
+     * @param authToken The packed bytes of a hw_auth_token_t to be provided to keymaster.
+     * @return {@code KeyStore.NO_ERROR} on success, otherwise an error value corresponding to
+     * a {@code KeymasterDefs.KM_ERROR_} value or {@code KeyStore} ResponseCode.
+     */
+    public int addAuthToken(byte[] authToken) {
+        try {
+            return mBinder.addAuthToken(authToken);
+        } catch (RemoteException e) {
+            Log.w(TAG, "Cannot connect to keystore", e);
+            return SYSTEM_ERROR;
+        }
+    }
+
+    public static KeyStoreException getKeyStoreException(int errorCode) {
+        if (errorCode > 0) {
+            // KeyStore layer error
+            switch (errorCode) {
+                case NO_ERROR:
+                    return new KeyStoreException(errorCode, "OK");
+                case LOCKED:
+                    return new KeyStoreException(errorCode, "Keystore locked");
+                case UNINITIALIZED:
+                    return new KeyStoreException(errorCode, "Keystore not initialized");
+                case SYSTEM_ERROR:
+                    return new KeyStoreException(errorCode, "System error");
+                case PERMISSION_DENIED:
+                    return new KeyStoreException(errorCode, "Permission denied");
+                case KEY_NOT_FOUND:
+                    return new KeyStoreException(errorCode, "Key not found");
+                case VALUE_CORRUPTED:
+                    return new KeyStoreException(errorCode, "Key blob corrupted");
+                default:
+                    return new KeyStoreException(errorCode, String.valueOf(errorCode));
+            }
+        } else {
+            // Keymaster layer error
+            switch (errorCode) {
+                case KeymasterDefs.KM_ERROR_INVALID_AUTHORIZATION_TIMEOUT:
+                    // The name of this parameter significantly differs between Keymaster and
+                    // framework APIs. Use the framework wording to make life easier for developers.
+                    return new KeyStoreException(errorCode,
+                            "Invalid user authentication validity duration");
+                default:
+                    return new KeyStoreException(errorCode,
+                            KeymasterDefs.getErrorMessage(errorCode));
+            }
+        }
+    }
+
+    public static CryptoOperationException getCryptoOperationException(KeyStoreException e) {
+        switch (e.getErrorCode()) {
+            case KeymasterDefs.KM_ERROR_KEY_EXPIRED:
+                return new KeyExpiredException();
+            case KeymasterDefs.KM_ERROR_KEY_NOT_YET_VALID:
+                return new KeyNotYetValidException();
+            case KeymasterDefs.KM_ERROR_KEY_USER_NOT_AUTHENTICATED:
+                return new UserNotAuthenticatedException();
+            default:
+                return new CryptoOperationException("Crypto operation failed", e);
+        }
+    }
+
+    public static CryptoOperationException getCryptoOperationException(int errorCode) {
+        return getCryptoOperationException(getKeyStoreException(errorCode));
     }
 }

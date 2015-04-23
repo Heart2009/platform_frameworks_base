@@ -58,15 +58,14 @@ public class Allocation extends BaseObj {
     Allocation mAdaptedAllocation;
     int mSize;
 
-    boolean mConstrainedLOD;
-    boolean mConstrainedFace;
-    boolean mConstrainedY;
-    boolean mConstrainedZ;
     boolean mReadAllowed = true;
     boolean mWriteAllowed = true;
+    boolean mAutoPadding = false;
+    int mSelectedX;
     int mSelectedY;
     int mSelectedZ;
     int mSelectedLOD;
+    int mSelectedArray[];
     Type.CubemapFace mSelectedFace = Type.CubemapFace.POSITIVE_X;
 
     int mCurrentDimX;
@@ -76,6 +75,8 @@ public class Allocation extends BaseObj {
     static HashMap<Long, Allocation> mAllocationMap =
             new HashMap<Long, Allocation>();
     OnBufferAvailableListener mBufferNotifier;
+
+    private Surface mGetSurfaceSurface = null;
 
     private Element.DataType validateObjectIsPrimitiveArray(Object d, boolean checkType) {
         final Class c = d.getClass();
@@ -269,6 +270,17 @@ public class Allocation extends BaseObj {
      */
     public int getUsage() {
         return mUsage;
+    }
+
+    /**
+     * @hide
+     * Enable/Disable AutoPadding for Vec3 elements.
+     *
+     * @param useAutoPadding True: enable AutoPadding; False: disable AutoPadding
+     *
+     */
+    public void setAutoPadding(boolean useAutoPadding) {
+        mAutoPadding = useAutoPadding;
     }
 
     /**
@@ -787,6 +799,7 @@ public class Allocation extends BaseObj {
         copy1DRangeFromUnchecked(xoff, count, data);
     }
 
+
     /**
      * This is only intended to be used by auto-generated code reflected from
      * the RenderScript script files.
@@ -796,12 +809,33 @@ public class Allocation extends BaseObj {
      * @param fp
      */
     public void setFromFieldPacker(int xoff, int component_number, FieldPacker fp) {
+        setFromFieldPacker(xoff, 0, 0, component_number, fp);
+    }
+
+    /**
+     * @hide
+     * This is only intended to be used by auto-generated code reflected from
+     * the RenderScript script files.
+     *
+     * @param xoff
+     * @param yoff
+     * @param zoff
+     * @param component_number
+     * @param fp
+     */
+    public void setFromFieldPacker(int xoff, int yoff, int zoff, int component_number, FieldPacker fp) {
         mRS.validate();
         if (component_number >= mType.mElement.mElements.length) {
             throw new RSIllegalArgumentException("Component_number " + component_number + " out of range.");
         }
         if(xoff < 0) {
-            throw new RSIllegalArgumentException("Offset must be >= 0.");
+            throw new RSIllegalArgumentException("Offset x must be >= 0.");
+        }
+        if(yoff < 0) {
+            throw new RSIllegalArgumentException("Offset y must be >= 0.");
+        }
+        if(zoff < 0) {
+            throw new RSIllegalArgumentException("Offset z must be >= 0.");
         }
 
         final byte[] data = fp.getData();
@@ -814,11 +848,11 @@ public class Allocation extends BaseObj {
                                                " does not match component size " + eSize + ".");
         }
 
-        mRS.nAllocationElementData1D(getIDSafe(), xoff, mSelectedLOD,
-                                     component_number, data, data_length);
+        mRS.nAllocationElementData(getIDSafe(), xoff, yoff, zoff, mSelectedLOD,
+                                   component_number, data, data_length);
     }
 
-    private void data1DChecks(int off, int count, int len, int dataSize) {
+    private void data1DChecks(int off, int count, int len, int dataSize, boolean usePadding) {
         mRS.validate();
         if(off < 0) {
             throw new RSIllegalArgumentException("Offset must be >= 0.");
@@ -830,8 +864,14 @@ public class Allocation extends BaseObj {
             throw new RSIllegalArgumentException("Overflow, Available count " + mCurrentCount +
                                                ", got " + count + " at offset " + off + ".");
         }
-        if(len < dataSize) {
-            throw new RSIllegalArgumentException("Array too small for allocation type.");
+        if(usePadding) {
+            if(len < dataSize / 4 * 3) {
+                throw new RSIllegalArgumentException("Array too small for allocation type.");
+            }
+        } else {
+            if(len < dataSize) {
+                throw new RSIllegalArgumentException("Array too small for allocation type.");
+            }
         }
     }
 
@@ -853,8 +893,14 @@ public class Allocation extends BaseObj {
                                           Element.DataType dt, int arrayLen) {
         Trace.traceBegin(RenderScript.TRACE_TAG, "copy1DRangeFromUnchecked");
         final int dataSize = mType.mElement.getBytesSize() * count;
-        data1DChecks(off, count, arrayLen * dt.mSize, dataSize);
-        mRS.nAllocationData1D(getIDSafe(), off, mSelectedLOD, count, array, dataSize, dt);
+        // AutoPadding for Vec3 Element
+        boolean usePadding = false;
+        if (mAutoPadding && (mType.getElement().getVectorSize() == 3)) {
+            usePadding = true;
+        }
+        data1DChecks(off, count, arrayLen * dt.mSize, dataSize, usePadding);
+        mRS.nAllocationData1D(getIDSafe(), off, mSelectedLOD, count, array, dataSize, dt,
+                              mType.mElement.mType.mSize, usePadding);
         Trace.traceEnd(RenderScript.TRACE_TAG);
     }
 
@@ -1031,8 +1077,24 @@ public class Allocation extends BaseObj {
         Trace.traceBegin(RenderScript.TRACE_TAG, "copy2DRangeFromUnchecked");
         mRS.validate();
         validate2DRange(xoff, yoff, w, h);
+        final int dataSize = mType.mElement.getBytesSize() * w * h;
+        // AutoPadding for Vec3 Element
+        boolean usePadding = false;
+        int sizeBytes = arrayLen * dt.mSize;
+        if (mAutoPadding && (mType.getElement().getVectorSize() == 3)) {
+            if (dataSize / 4 * 3 > sizeBytes) {
+                throw new RSIllegalArgumentException("Array too small for allocation type.");
+            }
+            usePadding = true;
+            sizeBytes = dataSize;
+        } else {
+            if (dataSize > sizeBytes) {
+                throw new RSIllegalArgumentException("Array too small for allocation type.");
+            }
+        }
         mRS.nAllocationData2D(getIDSafe(), xoff, yoff, mSelectedLOD, mSelectedFace.mID, w, h,
-                              array, arrayLen * dt.mSize, dt);
+                              array, sizeBytes, dt,
+                              mType.mElement.mType.mSize, usePadding);
         Trace.traceEnd(RenderScript.TRACE_TAG);
     }
 
@@ -1193,8 +1255,24 @@ public class Allocation extends BaseObj {
         Trace.traceBegin(RenderScript.TRACE_TAG, "copy3DRangeFromUnchecked");
         mRS.validate();
         validate3DRange(xoff, yoff, zoff, w, h, d);
+        final int dataSize = mType.mElement.getBytesSize() * w * h * d;
+        // AutoPadding for Vec3 Element
+        boolean usePadding = false;
+        int sizeBytes = arrayLen * dt.mSize;
+        if (mAutoPadding && (mType.getElement().getVectorSize() == 3)) {
+            if (dataSize / 4 * 3 > sizeBytes) {
+                throw new RSIllegalArgumentException("Array too small for allocation type.");
+            }
+            usePadding = true;
+            sizeBytes = dataSize;
+        } else {
+            if (dataSize > sizeBytes) {
+                throw new RSIllegalArgumentException("Array too small for allocation type.");
+            }
+        }
         mRS.nAllocationData3D(getIDSafe(), xoff, yoff, zoff, mSelectedLOD, w, h, d,
-                              array, arrayLen * dt.mSize, dt);
+                              array, sizeBytes, dt,
+                              mType.mElement.mType.mSize, usePadding);
         Trace.traceEnd(RenderScript.TRACE_TAG);
     }
 
@@ -1209,7 +1287,7 @@ public class Allocation extends BaseObj {
      * @param w Width of the region to update
      * @param h Height of the region to update
      * @param d Depth of the region to update
-     * @param data to be placed into the allocation
+     * @param array to be placed into the allocation
      */
     public void copy3DRangeFrom(int xoff, int yoff, int zoff, int w, int h, int d, Object array) {
         Trace.traceBegin(RenderScript.TRACE_TAG, "copy3DRangeFrom");
@@ -1263,7 +1341,22 @@ public class Allocation extends BaseObj {
     private void copyTo(Object array, Element.DataType dt, int arrayLen) {
         Trace.traceBegin(RenderScript.TRACE_TAG, "copyTo");
         mRS.validate();
-        mRS.nAllocationRead(getID(mRS), array, dt);
+        boolean usePadding = false;
+        if (mAutoPadding && (mType.getElement().getVectorSize() == 3)) {
+            usePadding = true;
+        }
+        if (usePadding) {
+            if (dt.mSize * arrayLen < mSize / 4 * 3) {
+                throw new RSIllegalArgumentException(
+                    "Size of output array cannot be smaller than size of allocation.");
+            }
+        } else {
+            if (dt.mSize * arrayLen < mSize) {
+                throw new RSIllegalArgumentException(
+                    "Size of output array cannot be smaller than size of allocation.");
+            }
+        }
+        mRS.nAllocationRead(getID(mRS), array, dt, mType.mElement.mType.mSize, usePadding);
         Trace.traceEnd(RenderScript.TRACE_TAG);
     }
 
@@ -1329,6 +1422,45 @@ public class Allocation extends BaseObj {
     }
 
     /**
+     * @hide
+     * This is only intended to be used by auto-generated code reflected from
+     * the RenderScript script files and should not be used by developers.
+     *
+     * @param xoff
+     * @param yoff
+     * @param zoff
+     * @param component_number
+     * @param array
+     */
+    public void copyToFieldPacker(int xoff, int yoff, int zoff, int component_number, FieldPacker fp) {
+        mRS.validate();
+        if (component_number >= mType.mElement.mElements.length) {
+            throw new RSIllegalArgumentException("Component_number " + component_number + " out of range.");
+        }
+        if(xoff < 0) {
+            throw new RSIllegalArgumentException("Offset x must be >= 0.");
+        }
+        if(yoff < 0) {
+            throw new RSIllegalArgumentException("Offset y must be >= 0.");
+        }
+        if(zoff < 0) {
+            throw new RSIllegalArgumentException("Offset z must be >= 0.");
+        }
+
+        final byte[] data = fp.getData();
+        int data_length = fp.getPos();
+        int eSize = mType.mElement.mElements[component_number].getBytesSize();
+        eSize *= mType.mElement.mArraySizes[component_number];
+
+        if (data_length != eSize) {
+            throw new RSIllegalArgumentException("Field packer sizelength " + data_length +
+                                               " does not match component size " + eSize + ".");
+        }
+
+        mRS.nAllocationElementRead(getIDSafe(), xoff, yoff, zoff, mSelectedLOD,
+                                   component_number, data, data_length);
+    }
+    /**
      * Resize a 1D allocation.  The contents of the allocation are preserved.
      * If new elements are allocated objects are created with null contents and
      * the new region is otherwise undefined.
@@ -1360,6 +1492,318 @@ public class Allocation extends BaseObj {
         updateCacheInfo(mType);
     }
 
+    private void copy1DRangeToUnchecked(int off, int count, Object array,
+                                        Element.DataType dt, int arrayLen) {
+        Trace.traceBegin(RenderScript.TRACE_TAG, "copy1DRangeToUnchecked");
+        final int dataSize = mType.mElement.getBytesSize() * count;
+        // AutoPadding for Vec3 Element
+        boolean usePadding = false;
+        if (mAutoPadding && (mType.getElement().getVectorSize() == 3)) {
+            usePadding = true;
+        }
+        data1DChecks(off, count, arrayLen * dt.mSize, dataSize, usePadding);
+        mRS.nAllocationRead1D(getIDSafe(), off, mSelectedLOD, count, array, dataSize, dt,
+                              mType.mElement.mType.mSize, usePadding);
+        Trace.traceEnd(RenderScript.TRACE_TAG);
+    }
+
+    /**
+     * @hide
+     * Copy part of this Allocation into an array.  This method does not
+     * guarantee that the Allocation is compatible with the input buffer.
+     *
+     * @param off The offset of the first element to be copied.
+     * @param count The number of elements to be copied.
+     * @param array The dest data array
+     */
+    public void copy1DRangeToUnchecked(int off, int count, Object array) {
+        copy1DRangeToUnchecked(off, count, array,
+                               validateObjectIsPrimitiveArray(array, false),
+                               java.lang.reflect.Array.getLength(array));
+    }
+
+    /**
+     * @hide
+     * Copy part of this Allocation into an array.  This method does not
+     * guarantee that the Allocation is compatible with the input buffer.
+     *
+     * @param off The offset of the first element to be copied.
+     * @param count The number of elements to be copied.
+     * @param d the source data array
+     */
+    public void copy1DRangeToUnchecked(int off, int count, int[] d) {
+        copy1DRangeToUnchecked(off, count, (Object)d, Element.DataType.SIGNED_32, d.length);
+    }
+
+    /**
+     * @hide
+     * Copy part of this Allocation into an array.  This method does not
+     * guarantee that the Allocation is compatible with the input buffer.
+     *
+     * @param off The offset of the first element to be copied.
+     * @param count The number of elements to be copied.
+     * @param d the source data array
+     */
+    public void copy1DRangeToUnchecked(int off, int count, short[] d) {
+        copy1DRangeToUnchecked(off, count, (Object)d, Element.DataType.SIGNED_16, d.length);
+    }
+
+    /**
+     * @hide
+     * Copy part of this Allocation into an array.  This method does not
+     * guarantee that the Allocation is compatible with the input buffer.
+     *
+     * @param off The offset of the first element to be copied.
+     * @param count The number of elements to be copied.
+     * @param d the source data array
+     */
+    public void copy1DRangeToUnchecked(int off, int count, byte[] d) {
+        copy1DRangeToUnchecked(off, count, (Object)d, Element.DataType.SIGNED_8, d.length);
+    }
+
+    /**
+     * @hide
+     * Copy part of this Allocation into an array.  This method does not
+     * guarantee that the Allocation is compatible with the input buffer.
+     *
+     * @param off The offset of the first element to be copied.
+     * @param count The number of elements to be copied.
+     * @param d the source data array
+     */
+    public void copy1DRangeToUnchecked(int off, int count, float[] d) {
+        copy1DRangeToUnchecked(off, count, (Object)d, Element.DataType.FLOAT_32, d.length);
+    }
+
+
+    /**
+     * @hide
+     * Copy part of this Allocation into an array.  This method does not
+     * and will generate exceptions if the Allocation type does not
+     * match the component type of the array passed in.
+     *
+     * @param off The offset of the first element to be copied.
+     * @param count The number of elements to be copied.
+     * @param array The source data array.
+     */
+    public void copy1DRangeTo(int off, int count, Object array) {
+        copy1DRangeToUnchecked(off, count, array,
+                               validateObjectIsPrimitiveArray(array, true),
+                               java.lang.reflect.Array.getLength(array));
+    }
+
+    /**
+     * @hide
+     * Copy part of this Allocation into an array.  This method does not
+     * and will generate exceptions if the Allocation type is not a 32 bit
+     * integer type.
+     *
+     * @param off The offset of the first element to be copied.
+     * @param count The number of elements to be copied.
+     * @param d the source data array
+     */
+    public void copy1DRangeTo(int off, int count, int[] d) {
+        validateIsInt32();
+        copy1DRangeToUnchecked(off, count, d, Element.DataType.SIGNED_32, d.length);
+    }
+
+    /**
+     * @hide
+     * Copy part of this Allocation into an array.  This method does not
+     * and will generate exceptions if the Allocation type is not a 16 bit
+     * integer type.
+     *
+     * @param off The offset of the first element to be copied.
+     * @param count The number of elements to be copied.
+     * @param d the source data array
+     */
+    public void copy1DRangeTo(int off, int count, short[] d) {
+        validateIsInt16();
+        copy1DRangeToUnchecked(off, count, d, Element.DataType.SIGNED_16, d.length);
+    }
+
+    /**
+     * @hide
+     * Copy part of this Allocation into an array.  This method does not
+     * and will generate exceptions if the Allocation type is not an 8 bit
+     * integer type.
+     *
+     * @param off The offset of the first element to be copied.
+     * @param count The number of elements to be copied.
+     * @param d the source data array
+     */
+    public void copy1DRangeTo(int off, int count, byte[] d) {
+        validateIsInt8();
+        copy1DRangeToUnchecked(off, count, d, Element.DataType.SIGNED_8, d.length);
+    }
+
+    /**
+     * @hide
+     * Copy part of this Allocation into an array.  This method does not
+     * and will generate exceptions if the Allocation type is not a 32 bit float
+     * type.
+     *
+     * @param off The offset of the first element to be copied.
+     * @param count The number of elements to be copied.
+     * @param d the source data array.
+     */
+    public void copy1DRangeTo(int off, int count, float[] d) {
+        validateIsFloat32();
+        copy1DRangeToUnchecked(off, count, d, Element.DataType.FLOAT_32, d.length);
+    }
+
+
+    void copy2DRangeToUnchecked(int xoff, int yoff, int w, int h, Object array,
+                                Element.DataType dt, int arrayLen) {
+        Trace.traceBegin(RenderScript.TRACE_TAG, "copy2DRangeToUnchecked");
+        mRS.validate();
+        validate2DRange(xoff, yoff, w, h);
+        final int dataSize = mType.mElement.getBytesSize() * w * h;
+        // AutoPadding for Vec3 Element
+        boolean usePadding = false;
+        int sizeBytes = arrayLen * dt.mSize;
+        if (mAutoPadding && (mType.getElement().getVectorSize() == 3)) {
+            if (dataSize / 4 * 3 > sizeBytes) {
+                throw new RSIllegalArgumentException("Array too small for allocation type.");
+            }
+            usePadding = true;
+            sizeBytes = dataSize;
+        } else {
+            if (dataSize > sizeBytes) {
+                throw new RSIllegalArgumentException("Array too small for allocation type.");
+            }
+        }
+        mRS.nAllocationRead2D(getIDSafe(), xoff, yoff, mSelectedLOD, mSelectedFace.mID, w, h,
+                              array, sizeBytes, dt, mType.mElement.mType.mSize, usePadding);
+        Trace.traceEnd(RenderScript.TRACE_TAG);
+    }
+
+    /**
+     * @hide
+     * Copy from a rectangular region in this Allocation into an array.
+     *
+     * @param xoff X offset of the region to copy in this Allocation
+     * @param yoff Y offset of the region to copy in this Allocation
+     * @param w Width of the region to copy
+     * @param h Height of the region to copy
+     * @param array Dest Array to be copied into
+     */
+    public void copy2DRangeTo(int xoff, int yoff, int w, int h, Object array) {
+        copy2DRangeToUnchecked(xoff, yoff, w, h, array,
+                               validateObjectIsPrimitiveArray(array, true),
+                               java.lang.reflect.Array.getLength(array));
+    }
+
+    /**
+     * @hide
+     * Copy from a rectangular region in this Allocation into an array.
+     *
+     * @param xoff X offset of the region to copy in this Allocation
+     * @param yoff Y offset of the region to copy in this Allocation
+     * @param w Width of the region to copy
+     * @param h Height of the region to copy
+     * @param data Dest Array to be copied into
+     */
+    public void copy2DRangeTo(int xoff, int yoff, int w, int h, byte[] data) {
+        validateIsInt8();
+        copy2DRangeToUnchecked(xoff, yoff, w, h, data,
+                               Element.DataType.SIGNED_8, data.length);
+    }
+
+    /**
+     * @hide
+     * Copy from a rectangular region in this Allocation into an array.
+     *
+     * @param xoff X offset of the region to copy in this Allocation
+     * @param yoff Y offset of the region to copy in this Allocation
+     * @param w Width of the region to copy
+     * @param h Height of the region to copy
+     * @param data Dest Array to be copied into
+     */
+    public void copy2DRangeTo(int xoff, int yoff, int w, int h, short[] data) {
+        validateIsInt16();
+        copy2DRangeToUnchecked(xoff, yoff, w, h, data,
+                               Element.DataType.SIGNED_16, data.length);
+    }
+
+    /**
+     * @hide
+     * Copy from a rectangular region in this Allocation into an array.
+     *
+     * @param xoff X offset of the region to copy in this Allocation
+     * @param yoff Y offset of the region to copy in this Allocation
+     * @param w Width of the region to copy
+     * @param h Height of the region to copy
+     * @param data Dest Array to be copied into
+     */
+    public void copy2DRangeTo(int xoff, int yoff, int w, int h, int[] data) {
+        validateIsInt32();
+        copy2DRangeToUnchecked(xoff, yoff, w, h, data,
+                               Element.DataType.SIGNED_32, data.length);
+    }
+
+    /**
+     * @hide
+     * Copy from a rectangular region in this Allocation into an array.
+     *
+     * @param xoff X offset of the region to copy in this Allocation
+     * @param yoff Y offset of the region to copy in this Allocation
+     * @param w Width of the region to copy
+     * @param h Height of the region to copy
+     * @param data Dest Array to be copied into
+     */
+    public void copy2DRangeTo(int xoff, int yoff, int w, int h, float[] data) {
+        validateIsFloat32();
+        copy2DRangeToUnchecked(xoff, yoff, w, h, data,
+                               Element.DataType.FLOAT_32, data.length);
+    }
+
+
+    /**
+     * @hide
+     *
+     */
+    private void copy3DRangeToUnchecked(int xoff, int yoff, int zoff, int w, int h, int d,
+                                        Object array, Element.DataType dt, int arrayLen) {
+        Trace.traceBegin(RenderScript.TRACE_TAG, "copy3DRangeToUnchecked");
+        mRS.validate();
+        validate3DRange(xoff, yoff, zoff, w, h, d);
+        final int dataSize = mType.mElement.getBytesSize() * w * h * d;
+        // AutoPadding for Vec3 Element
+        boolean usePadding = false;
+        int sizeBytes = arrayLen * dt.mSize;
+        if (mAutoPadding && (mType.getElement().getVectorSize() == 3)) {
+            if (dataSize / 4 * 3 > sizeBytes) {
+                throw new RSIllegalArgumentException("Array too small for allocation type.");
+            }
+            usePadding = true;
+            sizeBytes = dataSize;
+        } else {
+            if (dataSize > sizeBytes) {
+                throw new RSIllegalArgumentException("Array too small for allocation type.");
+            }
+        }
+        mRS.nAllocationRead3D(getIDSafe(), xoff, yoff, zoff, mSelectedLOD, w, h, d,
+                              array, sizeBytes, dt, mType.mElement.mType.mSize, usePadding);
+        Trace.traceEnd(RenderScript.TRACE_TAG);
+    }
+
+    /**
+     * @hide
+     * Copy from a rectangular region in this Allocation into an array.
+     *
+     * @param xoff X offset of the region to copy in this Allocation
+     * @param yoff Y offset of the region to copy in this Allocation
+     * @param zoff Z offset of the region to copy in this Allocation
+     * @param w Width of the region to copy
+     * @param h Height of the region to copy
+     * @param d Depth of the region to copy
+     * @param array Dest Array to be copied into
+     */
+    public void copy3DRangeTo(int xoff, int yoff, int zoff, int w, int h, int d, Object array) {
+        copy3DRangeToUnchecked(xoff, yoff, zoff, w, h, d, array,
+                                 validateObjectIsPrimitiveArray(array, true),
+                                 java.lang.reflect.Array.getLength(array));
+    }
 
     // creation
 
@@ -1555,7 +1999,12 @@ public class Allocation extends BaseObj {
         if ((mUsage & USAGE_IO_INPUT) == 0) {
             throw new RSInvalidStateException("Allocation is not a surface texture.");
         }
-        return mRS.nAllocationGetSurface(getID(mRS));
+
+        if (mGetSurfaceSurface == null) {
+            mGetSurfaceSurface = mRS.nAllocationGetSurface(getID(mRS));
+        }
+
+        return mGetSurfaceSurface;
     }
 
     /**
@@ -1878,4 +2327,15 @@ public class Allocation extends BaseObj {
         }
     }
 
+    /**
+     * For USAGE_IO_OUTPUT, destroy() implies setSurface(null).
+     *
+     */
+    @Override
+    public void destroy() {
+        if((mUsage & USAGE_IO_OUTPUT) != 0) {
+            setSurface(null);
+        }
+        super.destroy();
+    }
 }

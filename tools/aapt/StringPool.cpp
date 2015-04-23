@@ -13,7 +13,7 @@
 #include "ResourceTable.h"
 
 // SSIZE: mingw does not have signed size_t == ssize_t.
-#if HAVE_PRINTF_ZD
+#if !defined(_WIN32)
 #  define ZD "%zd"
 #  define ZD_TYPE ssize_t
 #  define SSIZE(x) x
@@ -26,10 +26,22 @@
 // Set to true for noisy debug output.
 static const bool kIsDebug = false;
 
+#if __cplusplus >= 201103L
 void strcpy16_htod(char16_t* dst, const char16_t* src)
 {
     while (*src) {
         char16_t s = htods(*src);
+        *dst++ = s;
+        src++;
+    }
+    *dst = 0;
+}
+#endif
+
+void strcpy16_htod(uint16_t* dst, const char16_t* src)
+{
+    while (*src) {
+        uint16_t s = htods(static_cast<uint16_t>(*src));
         *dst++ = s;
         src++;
     }
@@ -434,7 +446,7 @@ status_t StringPool::writeStringBlock(const sp<AaptFile>& pool)
         return NO_MEMORY;
     }
 
-    const size_t charSize = mUTF8 ? sizeof(uint8_t) : sizeof(char16_t);
+    const size_t charSize = mUTF8 ? sizeof(uint8_t) : sizeof(uint16_t);
 
     size_t strPos = 0;
     for (i=0; i<STRINGS; i++) {

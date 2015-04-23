@@ -133,6 +133,15 @@ enum DebugLevel {
 #define PROPERTY_DEBUG_STENCIL_CLIP "debug.hwui.show_non_rect_clip"
 
 /**
+ * Turn on to draw dirty regions every other frame.
+ *
+ * Possible values:
+ * "true", to enable dirty regions debugging
+ * "false", to disable dirty regions debugging
+ */
+#define PROPERTY_DEBUG_SHOW_DIRTY_REGIONS "debug.hwui.show_dirty_regions"
+
+/**
  * Disables draw operation deferral if set to "true", forcing draw
  * commands to be issued to OpenGL in order, and processed in sequence
  * with state-manipulation canvas commands.
@@ -244,7 +253,7 @@ enum DebugLevel {
 // Converts a number of kilo-bytes into bytes
 #define KB(s) s * 1024
 
-static DebugLevel readDebugLevel() {
+static inline DebugLevel readDebugLevel() {
     char property[PROPERTY_VALUE_MAX];
     if (property_get(PROPERTY_DEBUG, property, NULL) > 0) {
         return (DebugLevel) atoi(property);

@@ -260,9 +260,18 @@
          released, or define it however else you want, as long as each
          successive version has a higher number.  This is not a version
          number generally shown to the user, that is usually supplied 
-         with {@link android.R.attr#versionName}. -->
+         with {@link android.R.attr#versionName}.  When an app is delivered
+         as multiple split APKs, each APK must have the exact same versionCode. -->
     <attr name="versionCode" format="integer" />
-    
+
+    <!-- Internal revision code.  This number is the number used to determine
+         whether one APK is more recent than another: it has no other meaning
+         than that higher numbers are more recent.  This value is only meaningful
+         when the two {@link android.R.attr#versionCode} values are already
+         identical.  When an app is delivered as multiple split APKs, each
+         APK may have a different revisionCode value. -->
+    <attr name="revisionCode" format="integer" />
+
     <!-- The text shown to the user to indicate the version they have.  This
          is used for no other purpose than display to the user; the actual
          significant version number is given by {@link android.R.attr#versionCode}. -->
@@ -379,6 +388,15 @@
          with that application.  The activity is re-parented to the task
          with the same {@link android.R.attr#taskAffinity} as it has. -->
     <attr name="allowTaskReparenting" format="boolean" />
+
+    <!-- Declare that this application may use cleartext traffic (e.g., HTTP rather than HTTPS;
+         WebSockets rather than WebSockets Secure; XMPP, IMAP, STMP without STARTTLS or TLS).
+         Defaults to true. If set to false {@code false}, the app declares that it does not
+         intend to use cleartext network traffic, in which case platform components (e.g.,
+         HTTP stacks, {@code WebView}, {@code MediaPlayer}) will refuse app's requests to use
+         cleartext traffic. Third-party libraries are encouraged to honor this flag as well.
+         @hide -->
+    <attr name="usesCleartextTraffic" format="boolean" />
 
     <!-- Declare that code from this application will need to be loaded into other
          applications' processes. On devices that support multiple instruction sets,
@@ -1003,6 +1021,10 @@
          <p>The default value of this attribute is <code>false</code>. -->
     <attr name="resumeWhilePausing" format="boolean" />
 
+    <!-- When set installer will extract native libraries. If set to false
+         libraries in the apk must be stored and page-aligned.  -->
+    <attr name="extractNativeLibs" format="boolean"/>
+
     <!-- The <code>manifest</code> tag is the root of an
          <code>AndroidManifest.xml</code> file,
          describing the contents of an Android package (.apk) file.  One
@@ -1025,6 +1047,7 @@
     <declare-styleable name="AndroidManifest">
         <attr name="versionCode" />
         <attr name="versionName" />
+        <attr name="revisionCode" />
         <attr name="sharedUserId" />
         <attr name="sharedUserLabel" />
         <attr name="installLocation" />
@@ -1123,9 +1146,17 @@
              "com.google". -->
         <attr name="requiredAccountType" format="string"/>
         <attr name="isGame" />
+        <!-- Declare that this application may use cleartext traffic (e.g., HTTP rather than HTTPS;
+             WebSockets rather than WebSockets Secure; XMPP, IMAP, STMP without STARTTLS or TLS).
+             Defaults to true. If set to false {@code false}, the app declares that it does not
+             intend to use cleartext network traffic, in which case platform components (e.g.,
+             HTTP stacks, {@code WebView}, {@code MediaPlayer}) will refuse app's requests to use
+             cleartext traffic. Third-party libraries are encouraged to honor this flag as well.
+             @hide -->
+        <attr name="usesCleartextTraffic" />
         <attr name="multiArch" />
+        <attr name="extractNativeLibs" />
     </declare-styleable>
-    
     <!-- The <code>permission</code> tag declares a security permission that can be
          used to control access from other packages to specific components or
          features in your package (or other packages).  See the

@@ -614,9 +614,9 @@ public class Process {
         synchronized(Process.class) {
             ArrayList<String> argsForZygote = new ArrayList<String>();
 
-            // --runtime-init, --setuid=, --setgid=,
+            // --runtime-args, --setuid=, --setgid=,
             // and --setgroups= must go first
-            argsForZygote.add("--runtime-init");
+            argsForZygote.add("--runtime-args");
             argsForZygote.add("--setuid=" + uid);
             argsForZygote.add("--setgid=" + gid);
             if ((debugFlags & Zygote.DEBUG_ENABLE_JNI_LOGGING) != 0) {
@@ -630,6 +630,9 @@ public class Process {
             }
             if ((debugFlags & Zygote.DEBUG_ENABLE_CHECKJNI) != 0) {
                 argsForZygote.add("--enable-checkjni");
+            }
+            if ((debugFlags & Zygote.DEBUG_ENABLE_JIT) != 0) {
+                argsForZygote.add("--enable-jit");
             }
             if ((debugFlags & Zygote.DEBUG_ENABLE_ASSERT) != 0) {
                 argsForZygote.add("--enable-assert");
@@ -685,6 +688,20 @@ public class Process {
             }
 
             return zygoteSendArgsAndGetResult(openZygoteSocketIfNeeded(abi), argsForZygote);
+        }
+    }
+
+    /**
+     * Tries to establish a connection to the zygote that handles a given {@code abi}. Might block and retry if the
+     * zygote is unresponsive. This method is a no-op if a connection is already open.
+     *
+     * @hide
+     */
+    public static void establishZygoteConnectionForAbi(String abi) {
+        try {
+            openZygoteSocketIfNeeded(abi);
+        } catch (ZygoteStartFailedEx ex) {
+            throw new RuntimeException("Unable to connect to zygote for abi: " + abi, ex);
         }
     }
 

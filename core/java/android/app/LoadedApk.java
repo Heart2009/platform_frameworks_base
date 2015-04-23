@@ -45,6 +45,7 @@ import android.util.Slog;
 import android.util.SparseArray;
 import android.view.DisplayAdjustments;
 import android.view.Display;
+import android.os.SystemProperties;
 import dalvik.system.VMRuntime;
 
 import java.io.File;
@@ -156,7 +157,12 @@ public final class LoadedApk {
         // depending on what the current runtime's instruction set is.
         if (info.primaryCpuAbi != null && info.secondaryCpuAbi != null) {
             final String runtimeIsa = VMRuntime.getRuntime().vmInstructionSet();
-            final String secondaryIsa = VMRuntime.getInstructionSet(info.secondaryCpuAbi);
+
+            // Get the instruction set that the libraries of secondary Abi is supported.
+            // In presence of a native bridge this might be different than the one secondary Abi used.
+            String secondaryIsa = VMRuntime.getInstructionSet(info.secondaryCpuAbi);
+            final String secondaryDexCodeIsa = SystemProperties.get("ro.dalvik.vm.isa." + secondaryIsa);
+            secondaryIsa = secondaryDexCodeIsa.isEmpty() ? secondaryIsa : secondaryDexCodeIsa;
 
             // If the runtimeIsa is the same as the primary isa, then we do nothing.
             // Everything will be set up correctly because info.nativeLibraryDir will
@@ -632,55 +638,60 @@ public final class LoadedApk {
     public void removeContextRegistrations(Context context,
             String who, String what) {
         final boolean reportRegistrationLeaks = StrictMode.vmRegistrationLeaksEnabled();
-        ArrayMap<BroadcastReceiver, LoadedApk.ReceiverDispatcher> rmap =
-                mReceivers.remove(context);
-        if (rmap != null) {
-            for (int i=0; i<rmap.size(); i++) {
-                LoadedApk.ReceiverDispatcher rd = rmap.valueAt(i);
-                IntentReceiverLeaked leak = new IntentReceiverLeaked(
-                        what + " " + who + " has leaked IntentReceiver "
-                        + rd.getIntentReceiver() + " that was " +
-                        "originally registered here. Are you missing a " +
-                        "call to unregisterReceiver()?");
-                leak.setStackTrace(rd.getLocation().getStackTrace());
-                Slog.e(ActivityThread.TAG, leak.getMessage(), leak);
-                if (reportRegistrationLeaks) {
-                    StrictMode.onIntentReceiverLeaked(leak);
-                }
-                try {
-                    ActivityManagerNative.getDefault().unregisterReceiver(
-                            rd.getIIntentReceiver());
-                } catch (RemoteException e) {
-                    // system crashed, nothing we can do
+        synchronized (mReceivers) {
+            ArrayMap<BroadcastReceiver, LoadedApk.ReceiverDispatcher> rmap =
+                    mReceivers.remove(context);
+            if (rmap != null) {
+                for (int i = 0; i < rmap.size(); i++) {
+                    LoadedApk.ReceiverDispatcher rd = rmap.valueAt(i);
+                    IntentReceiverLeaked leak = new IntentReceiverLeaked(
+                            what + " " + who + " has leaked IntentReceiver "
+                            + rd.getIntentReceiver() + " that was " +
+                            "originally registered here. Are you missing a " +
+                            "call to unregisterReceiver()?");
+                    leak.setStackTrace(rd.getLocation().getStackTrace());
+                    Slog.e(ActivityThread.TAG, leak.getMessage(), leak);
+                    if (reportRegistrationLeaks) {
+                        StrictMode.onIntentReceiverLeaked(leak);
+                    }
+                    try {
+                        ActivityManagerNative.getDefault().unregisterReceiver(
+                                rd.getIIntentReceiver());
+                    } catch (RemoteException e) {
+                        // system crashed, nothing we can do
+                    }
                 }
             }
+            mUnregisteredReceivers.remove(context);
         }
-        mUnregisteredReceivers.remove(context);
-        //Slog.i(TAG, "Receiver registrations: " + mReceivers);
-        ArrayMap<ServiceConnection, LoadedApk.ServiceDispatcher> smap =
-            mServices.remove(context);
-        if (smap != null) {
-            for (int i=0; i<smap.size(); i++) {
-                LoadedApk.ServiceDispatcher sd = smap.valueAt(i);
-                ServiceConnectionLeaked leak = new ServiceConnectionLeaked(
-                        what + " " + who + " has leaked ServiceConnection "
-                        + sd.getServiceConnection() + " that was originally bound here");
-                leak.setStackTrace(sd.getLocation().getStackTrace());
-                Slog.e(ActivityThread.TAG, leak.getMessage(), leak);
-                if (reportRegistrationLeaks) {
-                    StrictMode.onServiceConnectionLeaked(leak);
+
+        synchronized (mServices) {
+            //Slog.i(TAG, "Receiver registrations: " + mReceivers);
+            ArrayMap<ServiceConnection, LoadedApk.ServiceDispatcher> smap =
+                    mServices.remove(context);
+            if (smap != null) {
+                for (int i = 0; i < smap.size(); i++) {
+                    LoadedApk.ServiceDispatcher sd = smap.valueAt(i);
+                    ServiceConnectionLeaked leak = new ServiceConnectionLeaked(
+                            what + " " + who + " has leaked ServiceConnection "
+                            + sd.getServiceConnection() + " that was originally bound here");
+                    leak.setStackTrace(sd.getLocation().getStackTrace());
+                    Slog.e(ActivityThread.TAG, leak.getMessage(), leak);
+                    if (reportRegistrationLeaks) {
+                        StrictMode.onServiceConnectionLeaked(leak);
+                    }
+                    try {
+                        ActivityManagerNative.getDefault().unbindService(
+                                sd.getIServiceConnection());
+                    } catch (RemoteException e) {
+                        // system crashed, nothing we can do
+                    }
+                    sd.doForget();
                 }
-                try {
-                    ActivityManagerNative.getDefault().unbindService(
-                            sd.getIServiceConnection());
-                } catch (RemoteException e) {
-                    // system crashed, nothing we can do
-                }
-                sd.doForget();
             }
+            mUnboundServices.remove(context);
+            //Slog.i(TAG, "Service registrations: " + mServices);
         }
-        mUnboundServices.remove(context);
-        //Slog.i(TAG, "Service registrations: " + mServices);
     }
 
     public IIntentReceiver getReceiverDispatcher(BroadcastReceiver r,
@@ -796,7 +807,7 @@ public final class LoadedApk {
                         if (extras != null) {
                             extras.setAllowFds(false);
                         }
-                        mgr.finishReceiver(this, resultCode, data, extras, false);
+                        mgr.finishReceiver(this, resultCode, data, extras, false, intent.getFlags());
                     } catch (RemoteException e) {
                         Slog.w(ActivityThread.TAG, "Couldn't finish broadcast to unregistered receiver");
                     }
@@ -821,8 +832,8 @@ public final class LoadedApk {
             public Args(Intent intent, int resultCode, String resultData, Bundle resultExtras,
                     boolean ordered, boolean sticky, int sendingUser) {
                 super(resultCode, resultData, resultExtras,
-                        mRegistered ? TYPE_REGISTERED : TYPE_UNREGISTERED,
-                        ordered, sticky, mIIntentReceiver.asBinder(), sendingUser);
+                        mRegistered ? TYPE_REGISTERED : TYPE_UNREGISTERED, ordered,
+                        sticky, mIIntentReceiver.asBinder(), sendingUser, intent.getFlags());
                 mCurIntent = intent;
                 mOrdered = ordered;
             }

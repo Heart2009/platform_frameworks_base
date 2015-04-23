@@ -36,6 +36,17 @@
 
 namespace android {
 
+/**
+ * In C++11, char16_t is defined as *at least* 16 bits. We do a lot of
+ * casting on raw data and expect char16_t to be exactly 16 bits.
+ */
+#if __cplusplus >= 201103L
+struct __assertChar16Size {
+    static_assert(sizeof(char16_t) == sizeof(uint16_t), "char16_t is not 16 bits");
+    static_assert(alignof(char16_t) == alignof(uint16_t), "char16_t is not 16-bit aligned");
+};
+#endif
+
 /** ********************************************************************
  *  PNG Extensions
  *
@@ -101,15 +112,15 @@ namespace android {
  *
  * The PNG chunk type is "npTc".
  */
-struct Res_png_9patch
+struct alignas(uintptr_t) Res_png_9patch
 {
     Res_png_9patch() : wasDeserialized(false), xDivsOffset(0),
                        yDivsOffset(0), colorsOffset(0) { }
 
     int8_t wasDeserialized;
-    int8_t numXDivs;
-    int8_t numYDivs;
-    int8_t numColors;
+    uint8_t numXDivs;
+    uint8_t numYDivs;
+    uint8_t numColors;
 
     // The offset (from the start of this structure) to the xDivs & yDivs
     // array for this 9patch. To get a pointer to this array, call
@@ -236,8 +247,8 @@ enum {
 #define Res_MAKEINTERNAL(entry) (0x01000000 | (entry&0xFFFF))
 #define Res_MAKEARRAY(entry) (0x02000000 | (entry&0xFFFF))
 
-#define Res_MAXPACKAGE 255
-#define Res_MAXTYPE 255
+static const size_t Res_MAXPACKAGE = 255;
+static const size_t Res_MAXTYPE = 255;
 
 /**
  * Representation of a value in a resource, supplying type
@@ -253,7 +264,8 @@ struct Res_value
         
     // Type of the data value.
     enum {
-        // Contains no data.
+        // The 'data' is either 0 or 1, specifying this resource is either
+        // undefined or empty, respectively.
         TYPE_NULL = 0x00,
         // The 'data' holds a ResTable_ref, a reference to another resource
         // table entry.
@@ -351,8 +363,17 @@ struct Res_value
         COMPLEX_MANTISSA_MASK = 0xffffff
     };
 
+    // Possible data values for TYPE_NULL.
+    enum {
+        // The value is not defined.
+        DATA_NULL_UNDEFINED = 0,
+        // The value is explicitly defined as empty.
+        DATA_NULL_EMPTY = 1
+    };
+
     // The data for this item, as interpreted according to dataType.
-    uint32_t data;
+    typedef uint32_t data_type;
+    data_type data;
 
     void copyFrom_dtoh(const Res_value& src);
 };
@@ -836,7 +857,7 @@ struct ResTable_package
     uint32_t id;
 
     // Actual name of this package, \0-terminated.
-    char16_t name[128];
+    uint16_t name[128];
 
     // Offset to a ResStringPool_header defining the resource
     // type symbol table.  If zero, this package is inheriting from
@@ -1441,7 +1462,7 @@ struct ResTable_lib_entry
     uint32_t packageId;
 
     // The package name of the shared library. \0 terminated.
-    char16_t packageName[128];
+    uint16_t packageName[128];
 };
 
 /**
@@ -1481,6 +1502,8 @@ private:
     uint8_t                         mLookupTable[256];
     KeyedVector<String16, uint8_t>  mEntries;
 };
+
+bool U16StringToInt(const char16_t* s, size_t len, Res_value* outValue);
 
 /**
  * Convenience class for accessing data in a ResTable resource.
@@ -1759,7 +1782,7 @@ public:
     const DynamicRefTable* getDynamicRefTableForCookie(int32_t cookie) const;
 
     // Return the configurations (ResTable_config) that we know about
-    void getConfigurations(Vector<ResTable_config>* configs) const;
+    void getConfigurations(Vector<ResTable_config>* configs, bool ignoreMipmap=false) const;
 
     void getLocales(Vector<String8>* locales) const;
 
@@ -1773,9 +1796,7 @@ public:
             const char* targetPath, const char* overlayPath,
             void** outData, size_t* outSize) const;
 
-    enum {
-        IDMAP_HEADER_SIZE_BYTES = 4 * sizeof(uint32_t) + 2 * 256,
-    };
+    static const size_t IDMAP_HEADER_SIZE_BYTES = 4 * sizeof(uint32_t) + 2 * 256;
 
     // Retrieve idmap meta-data.
     //
@@ -1807,6 +1828,9 @@ private:
         const PackageGroup* packageGroup, int typeIndex, int entryIndex,
         const ResTable_config* config,
         Entry* outEntry) const;
+
+    uint32_t findEntry(const PackageGroup* group, ssize_t typeIndex, const char16_t* name,
+            size_t nameLen, uint32_t* outTypeSpecFlags) const;
 
     status_t parsePackage(
         const ResTable_package* const pkg, const Header* const header);

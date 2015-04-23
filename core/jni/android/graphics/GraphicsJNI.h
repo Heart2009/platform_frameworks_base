@@ -1,5 +1,5 @@
-#ifndef GraphicsJNI_DEFINED
-#define GraphicsJNI_DEFINED
+#ifndef _ANDROID_GRAPHICS_GRAPHICS_JNI_H_
+#define _ANDROID_GRAPHICS_GRAPHICS_JNI_H_
 
 #include "SkBitmap.h"
 #include "SkDevice.h"
@@ -15,7 +15,7 @@ class SkCanvas;
 
 namespace android {
 class Paint;
-class TypefaceImpl;
+struct TypefaceImpl;
 }
 
 class GraphicsJNI {
@@ -123,52 +123,11 @@ public:
 
     virtual ~AndroidPixelRef();
 
-    jbyteArray getStorageObj();
-
-    void setLocalJNIRef(jbyteArray arr);
-
-    /** Used to hold a ref to the pixels when the Java bitmap may be collected.
-     *  If specified, 'localref' is a valid JNI local reference to the byte array
-     *  containing the pixel data.
-     *
-     *  'localref' may only be NULL if setLocalJNIRef() was already called with
-     *  a JNI local ref that is still valid.
-     */
-    virtual void globalRef(void* localref=NULL);
-
-    /** Release a ref that was acquired using globalRef(). */
-    virtual void globalUnref();
-
 private:
     AndroidPixelRef* const fWrappedPixelRef; // if set, delegate memory management calls to this
 
     JavaVM* fVM;
-    bool fOnJavaHeap; // If true, the memory was allocated on the Java heap
-
     jbyteArray fStorageObj; // The Java byte[] object used as the bitmap backing store
-    bool fHasGlobalRef; // If true, fStorageObj holds a JNI global ref
-
-    mutable int32_t fGlobalRefCnt;
-};
-
-/** A helper class for accessing Java-heap-allocated bitmaps.
- *  This should be used when calling into a JNI method that retains a
- *  reference to the bitmap longer than the lifetime of the Java Bitmap.
- *
- *  After creating an instance of this class, a call to
- *  AndroidPixelRef::globalRef() will allocate a JNI global reference
- *  to the backing buffer object.
- */
-class JavaHeapBitmapRef {
-public:
-
-    JavaHeapBitmapRef(JNIEnv *env, SkBitmap* nativeBitmap, jbyteArray buffer);
-    ~JavaHeapBitmapRef();
-
-private:
-    JNIEnv* fEnv;
-    SkBitmap* fNativeBitmap;
-    jbyteArray fBuffer;
 };
 
 /** Allocator which allocates the backing buffer in the Java heap.
@@ -201,7 +160,6 @@ public:
 
 private:
     JavaVM* fVM;
-    bool fAllocateInJavaHeap;
     jbyteArray fStorageObj;
     int fAllocCount;
 };
@@ -289,4 +247,4 @@ void doThrowIOE(JNIEnv* env, const char* msg = NULL);   // IO Exception
 #define NPE_CHECK_RETURN_VOID(env, object)    \
     do { if (NULL == (object)) { doThrowNPE(env); return; } } while (0)
 
-#endif
+#endif  // _ANDROID_GRAPHICS_GRAPHICS_JNI_H_

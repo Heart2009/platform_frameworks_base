@@ -126,8 +126,8 @@ public class TaskStack {
             return false;
         }
 
-        mDimLayer.setBounds(bounds);
-        mAnimationBackgroundSurface.setBounds(bounds);
+        mDimLayer.setBounds(bounds, false);
+        mAnimationBackgroundSurface.setBounds(bounds, false);
         mBounds.set(bounds);
 
         return true;
@@ -191,7 +191,9 @@ public class TaskStack {
         mTasks.add(stackNdx, task);
 
         task.mStack = this;
-        mDisplayContent.moveStack(this, true);
+        if (toTop) {
+            mDisplayContent.moveStack(this, true);
+        }
         EventLog.writeEvent(EventLogTags.WM_TASK_MOVED, task.taskId, toTop ? 1 : 0, stackNdx);
     }
 

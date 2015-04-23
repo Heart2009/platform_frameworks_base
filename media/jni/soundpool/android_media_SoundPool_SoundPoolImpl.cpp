@@ -23,7 +23,7 @@
 #include <nativehelper/jni.h>
 #include <nativehelper/JNIHelp.h>
 #include <android_runtime/AndroidRuntime.h>
-#include <media/SoundPool.h>
+#include "SoundPool.h"
 
 using namespace android;
 
@@ -45,20 +45,6 @@ struct audio_attributes_fields_t {
 static audio_attributes_fields_t javaAudioAttrFields;
 
 // ----------------------------------------------------------------------------
-static jint
-android_media_SoundPool_SoundPoolImpl_load_URL(JNIEnv *env, jobject thiz, jstring path, jint priority)
-{
-    ALOGV("android_media_SoundPool_SoundPoolImpl_load_URL");
-    SoundPool *ap = MusterSoundPool(env, thiz);
-    if (path == NULL) {
-        jniThrowException(env, "java/lang/IllegalArgumentException", NULL);
-        return 0;
-    }
-    const char* s = env->GetStringUTFChars(path, NULL);
-    int id = ap->load(s, priority);
-    env->ReleaseStringUTFChars(path, s);
-    return (jint) id;
-}
 
 static jint
 android_media_SoundPool_SoundPoolImpl_load_FD(JNIEnv *env, jobject thiz, jobject fileDescriptor,
@@ -231,14 +217,14 @@ android_media_SoundPool_SoundPoolImpl_release(JNIEnv *env, jobject thiz)
     SoundPool *ap = MusterSoundPool(env, thiz);
     if (ap != NULL) {
 
-        // release weak reference
+        // release weak reference and clear callback
         jobject weakRef = (jobject) ap->getUserData();
+        ap->setCallback(NULL, NULL);
         if (weakRef != NULL) {
             env->DeleteGlobalRef(weakRef);
         }
 
-        // clear callback and native context
-        ap->setCallback(NULL, NULL);
+        // clear native context
         env->SetLongField(thiz, fields.mNativeContext, 0);
         delete ap;
     }
@@ -248,10 +234,6 @@ android_media_SoundPool_SoundPoolImpl_release(JNIEnv *env, jobject thiz)
 
 // Dalvik VM type signatures
 static JNINativeMethod gMethods[] = {
-    {   "_load",
-        "(Ljava/lang/String;I)I",
-        (void *)android_media_SoundPool_SoundPoolImpl_load_URL
-    },
     {   "_load",
         "(Ljava/io/FileDescriptor;JJI)I",
         (void *)android_media_SoundPool_SoundPoolImpl_load_FD
@@ -312,7 +294,7 @@ static JNINativeMethod gMethods[] = {
 
 static const char* const kClassPathName = "android/media/SoundPool$SoundPoolImpl";
 
-jint JNI_OnLoad(JavaVM* vm, void* reserved)
+jint JNI_OnLoad(JavaVM* vm, void* /* reserved */)
 {
     JNIEnv* env = NULL;
     jint result = -1;

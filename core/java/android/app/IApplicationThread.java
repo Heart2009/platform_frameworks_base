@@ -35,6 +35,7 @@ import android.os.IBinder;
 import android.os.IInterface;
 import android.service.voice.IVoiceInteractionSession;
 import com.android.internal.app.IVoiceInteractor;
+import com.android.internal.content.ReferrerIntent;
 
 import java.io.FileDescriptor;
 import java.util.List;
@@ -59,14 +60,14 @@ public interface IApplicationThread extends IInterface {
     void scheduleSendResult(IBinder token, List<ResultInfo> results) throws RemoteException;
     void scheduleLaunchActivity(Intent intent, IBinder token, int ident,
             ActivityInfo info, Configuration curConfig, CompatibilityInfo compatInfo,
-            IVoiceInteractor voiceInteractor, int procState, Bundle state,
+            String referrer, IVoiceInteractor voiceInteractor, int procState, Bundle state,
             PersistableBundle persistentState, List<ResultInfo> pendingResults,
-            List<Intent> pendingNewIntents, boolean notResumed, boolean isForward,
+            List<ReferrerIntent> pendingNewIntents, boolean notResumed, boolean isForward,
             ProfilerInfo profilerInfo) throws RemoteException;
     void scheduleRelaunchActivity(IBinder token, List<ResultInfo> pendingResults,
-            List<Intent> pendingNewIntents, int configChanges,
+            List<ReferrerIntent> pendingNewIntents, int configChanges,
             boolean notResumed, Configuration config) throws RemoteException;
-    void scheduleNewIntent(List<Intent> intent, IBinder token) throws RemoteException;
+    void scheduleNewIntent(List<ReferrerIntent> intent, IBinder token) throws RemoteException;
     void scheduleDestroyActivity(IBinder token, boolean finished,
             int configChanges) throws RemoteException;
     void scheduleReceiver(Intent intent, ActivityInfo info, CompatibilityInfo compatInfo,
@@ -146,6 +147,7 @@ public interface IApplicationThread extends IInterface {
     void scheduleCancelVisibleBehind(IBinder token) throws RemoteException;
     void scheduleBackgroundVisibleBehindChanged(IBinder token, boolean enabled) throws RemoteException;
     void scheduleEnterAnimationComplete(IBinder token) throws RemoteException;
+    void notifyCleartextNetwork(byte[] firstPacket) throws RemoteException;
 
     String descriptor = "android.app.IApplicationThread";
 
@@ -203,4 +205,5 @@ public interface IApplicationThread extends IInterface {
     int CANCEL_VISIBLE_BEHIND_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION+52;
     int BACKGROUND_VISIBLE_BEHIND_CHANGED_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION+53;
     int ENTER_ANIMATION_COMPLETE_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION+54;
+    int NOTIFY_CLEARTEXT_NETWORK_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION+55;
 }

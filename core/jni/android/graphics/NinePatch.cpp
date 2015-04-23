@@ -21,7 +21,7 @@
 #include <androidfw/ResourceTypes.h>
 #include <utils/Log.h>
 
-#include <Caches.h>
+#include <ResourceCache.h>
 
 #include "Paint.h"
 #include "Canvas.h"
@@ -30,6 +30,7 @@
 #include "GraphicsJNI.h"
 
 #include "JNIHelp.h"
+#include "core_jni_helpers.h"
 
 extern void NinePatch_Draw(SkCanvas* canvas, const SkRect& bounds, const SkBitmap& bitmap,
         const android::Res_png_9patch& chunk, const SkPaint* paint, SkRegion** outRegion);
@@ -80,9 +81,9 @@ public:
     static void finalize(JNIEnv* env, jobject, jlong patchHandle) {
         int8_t* patch = reinterpret_cast<int8_t*>(patchHandle);
 #ifdef USE_OPENGL_RENDERER
-        if (android::uirenderer::Caches::hasInstance()) {
+        if (android::uirenderer::ResourceCache::hasInstance()) {
             Res_png_9patch* p = (Res_png_9patch*) patch;
-            android::uirenderer::Caches::getInstance().resourceCache.destructor(p);
+            android::uirenderer::ResourceCache::getInstance().destructor(p);
             return;
         }
 #endif // USE_OPENGL_RENDERER
@@ -176,8 +177,6 @@ public:
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-#include <android_runtime/AndroidRuntime.h>
-
 static JNINativeMethod gNinePatchMethods[] = {
     { "isNinePatchChunk", "([B)Z",                        (void*) SkNinePatchGlue::isNinePatchChunk },
     { "validateNinePatchChunk", "(J[B)J",                 (void*) SkNinePatchGlue::validateNinePatchChunk },
@@ -189,6 +188,6 @@ static JNINativeMethod gNinePatchMethods[] = {
 };
 
 int register_android_graphics_NinePatch(JNIEnv* env) {
-    return android::AndroidRuntime::registerNativeMethods(env,
-            "android/graphics/NinePatch", gNinePatchMethods, SK_ARRAY_COUNT(gNinePatchMethods));
+    return android::RegisterMethodsOrDie(env,
+            "android/graphics/NinePatch", gNinePatchMethods, NELEM(gNinePatchMethods));
 }

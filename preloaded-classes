@@ -1146,8 +1146,6 @@ android.provider.Settings$SettingNotFoundException
 android.provider.Settings$System
 android.provider.Telephony$Mms
 android.renderscript.RenderScript
-android.security.AndroidKeyPairGenerator
-android.security.AndroidKeyStore
 android.security.AndroidKeyStoreProvider
 android.speech.tts.TextToSpeechService
 android.speech.tts.TextToSpeechService$SpeechItemV1
@@ -1172,6 +1170,7 @@ android.system.StructUtsname
 android.telecom.InCallService
 android.telephony.PhoneNumberUtils
 android.telephony.Rlog
+android.telephony.SignalStrength
 android.telephony.SubscriptionManager
 android.telephony.TelephonyManager
 android.text.AndroidBidi
@@ -2631,7 +2630,6 @@ javax.microedition.khronos.opengles.GL11Ext
 javax.microedition.khronos.opengles.GL11ExtensionPack
 javax.net.DefaultSocketFactory
 javax.net.SocketFactory
-javax.net.ssl.DefaultHostnameVerifier
 javax.net.ssl.DistinguishedNameParser
 javax.net.ssl.HostnameVerifier
 javax.net.ssl.HttpsURLConnection

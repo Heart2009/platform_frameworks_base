@@ -30,7 +30,7 @@
 #include "Utils.h"
 #include "JNIHelp.h"
 
-#include <android_runtime/AndroidRuntime.h>
+#include "core_jni_helpers.h"
 #include "android_util_Binder.h"
 #include "android_nio_utils.h"
 #include "CreateJavaOutputStreamAdaptor.h"
@@ -39,12 +39,6 @@
 #include <jni.h>
 #include <androidfw/Asset.h>
 #include <sys/stat.h>
-
-#if 0
-    #define TRACE_BITMAP(code)  code
-#else
-    #define TRACE_BITMAP(code)
-#endif
 
 using namespace android;
 
@@ -242,6 +236,7 @@ static jobject nativeDecodeRegion(JNIEnv* env, jobject, jlong brdHandle,
     }
 
     if (tileBitmap != NULL) {
+        bitmap->notifyPixelsChanged();
         return tileBitmap;
     }
 
@@ -272,8 +267,6 @@ static void nativeClean(JNIEnv* env, jobject, jlong brdHandle) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-#include <android_runtime/AndroidRuntime.h>
 
 static JNINativeMethod gBitmapRegionDecoderMethods[] = {
     {   "nativeDecodeRegion",
@@ -307,10 +300,8 @@ static JNINativeMethod gBitmapRegionDecoderMethods[] = {
     },
 };
 
-#define kClassPathName  "android/graphics/BitmapRegionDecoder"
-
 int register_android_graphics_BitmapRegionDecoder(JNIEnv* env)
 {
-    return android::AndroidRuntime::registerNativeMethods(env, kClassPathName,
-            gBitmapRegionDecoderMethods, SK_ARRAY_COUNT(gBitmapRegionDecoderMethods));
+    return android::RegisterMethodsOrDie(env, "android/graphics/BitmapRegionDecoder",
+            gBitmapRegionDecoderMethods, NELEM(gBitmapRegionDecoderMethods));
 }

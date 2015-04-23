@@ -24,7 +24,6 @@ public:
     }
 
     virtual size_t read(void* buffer, size_t size) {
-        JNIEnv* env = fEnv;
         if (NULL == buffer) {
             if (0 == size) {
                 return 0;
@@ -78,6 +77,8 @@ private:
                 env->ExceptionDescribe();
                 env->ExceptionClear();
                 SkDebugf("---- read threw an exception\n");
+                // Consider the stream to be at the end, since there was an error.
+                fIsAtEnd = true;
                 return 0;
             }
 
@@ -92,6 +93,9 @@ private:
                 env->ExceptionDescribe();
                 env->ExceptionClear();
                 SkDebugf("---- read:GetByteArrayRegion threw an exception\n");
+                // The error was not with the stream itself, but consider it to be at the
+                // end, since we do not have a way to recover.
+                fIsAtEnd = true;
                 return 0;
             }
 

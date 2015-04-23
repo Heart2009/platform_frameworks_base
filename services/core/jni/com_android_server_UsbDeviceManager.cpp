@@ -41,20 +41,12 @@ static struct parcel_file_descriptor_offsets_t
     jmethodID mConstructor;
 } gParcelFileDescriptorOffsets;
 
-static void checkAndClearExceptionFromCallback(JNIEnv* env, const char* methodName) {
-    if (env->ExceptionCheck()) {
-        ALOGE("An exception was thrown by callback '%s'.", methodName);
-        LOGE_EX(env);
-        env->ExceptionClear();
-    }
-}
-
 static void set_accessory_string(JNIEnv *env, int fd, int cmd, jobjectArray strArray, int index)
 {
     char buffer[256];
 
     buffer[0] = 0;
-    int length = ioctl(fd, cmd, buffer);
+    ioctl(fd, cmd, buffer);
     if (buffer[0]) {
         jstring obj = env->NewStringUTF(buffer);
         env->SetObjectArrayElement(strArray, index, obj);

@@ -25,6 +25,8 @@
 #include <Interpolator.h>
 #include <RenderProperties.h>
 
+#include "core_jni_helpers.h"
+
 namespace android {
 
 using namespace uirenderer;
@@ -44,6 +46,15 @@ static JNIEnv* getEnv(JavaVM* vm) {
     }
     return env;
 }
+
+class AnimationListenerLifecycleChecker : public AnimationListener {
+public:
+    virtual void onAnimationFinished(BaseRenderNodeAnimator* animator) {
+        LOG_ALWAYS_FATAL("Lifecycle failure, nStart(%p) wasn't called", animator);
+    }
+};
+
+static AnimationListenerLifecycleChecker sLifecycleChecker;
 
 class AnimationListenerBridge : public AnimationListener {
 public:
@@ -100,6 +111,7 @@ static jlong createAnimator(JNIEnv* env, jobject clazz,
         jint propertyRaw, jfloat finalValue) {
     RenderPropertyAnimator::RenderProperty property = toRenderProperty(propertyRaw);
     BaseRenderNodeAnimator* animator = new RenderPropertyAnimator(property, finalValue);
+    animator->setListener(&sLifecycleChecker);
     return reinterpret_cast<jlong>( animator );
 }
 
@@ -107,6 +119,7 @@ static jlong createCanvasPropertyFloatAnimator(JNIEnv* env, jobject clazz,
         jlong canvasPropertyPtr, jfloat finalValue) {
     CanvasPropertyPrimitive* canvasProperty = reinterpret_cast<CanvasPropertyPrimitive*>(canvasPropertyPtr);
     BaseRenderNodeAnimator* animator = new CanvasPropertyPrimitiveAnimator(canvasProperty, finalValue);
+    animator->setListener(&sLifecycleChecker);
     return reinterpret_cast<jlong>( animator );
 }
 
@@ -117,12 +130,14 @@ static jlong createCanvasPropertyPaintAnimator(JNIEnv* env, jobject clazz,
     CanvasPropertyPaintAnimator::PaintField paintField = toPaintField(paintFieldRaw);
     BaseRenderNodeAnimator* animator = new CanvasPropertyPaintAnimator(
             canvasProperty, paintField, finalValue);
+    animator->setListener(&sLifecycleChecker);
     return reinterpret_cast<jlong>( animator );
 }
 
 static jlong createRevealAnimator(JNIEnv* env, jobject clazz,
         jint centerX, jint centerY, jfloat startRadius, jfloat endRadius) {
     BaseRenderNodeAnimator* animator = new RevealAnimator(centerX, centerY, startRadius, endRadius);
+    animator->setListener(&sLifecycleChecker);
     return reinterpret_cast<jlong>( animator );
 }
 
@@ -148,11 +163,6 @@ static void setStartDelay(JNIEnv* env, jobject clazz, jlong animatorPtr, jlong s
     animator->setStartDelay(startDelay);
 }
 
-static jlong getStartDelay(JNIEnv* env, jobject clazz, jlong animatorPtr) {
-    BaseRenderNodeAnimator* animator = reinterpret_cast<BaseRenderNodeAnimator*>(animatorPtr);
-    return static_cast<jlong>(animator->startDelay());
-}
-
 static void setInterpolator(JNIEnv* env, jobject clazz, jlong animatorPtr, jlong interpolatorPtr) {
     BaseRenderNodeAnimator* animator = reinterpret_cast<BaseRenderNodeAnimator*>(animatorPtr);
     Interpolator* interpolator = reinterpret_cast<Interpolator*>(interpolatorPtr);
@@ -164,11 +174,13 @@ static void setAllowRunningAsync(JNIEnv* env, jobject clazz, jlong animatorPtr, 
     animator->setAllowRunningAsync(mayRunAsync);
 }
 
-static void start(JNIEnv* env, jobject clazz, jlong animatorPtr, jobject finishListener) {
+static void setListener(JNIEnv* env, jobject clazz, jlong animatorPtr, jobject finishListener) {
     BaseRenderNodeAnimator* animator = reinterpret_cast<BaseRenderNodeAnimator*>(animatorPtr);
-    if (finishListener) {
-        animator->setListener(new AnimationListenerBridge(env, finishListener));
-    }
+    animator->setListener(new AnimationListenerBridge(env, finishListener));
+}
+
+static void start(JNIEnv* env, jobject clazz, jlong animatorPtr) {
+    BaseRenderNodeAnimator* animator = reinterpret_cast<BaseRenderNodeAnimator*>(animatorPtr);
     animator->start();
 }
 
@@ -197,27 +209,25 @@ static JNINativeMethod gMethods[] = {
     { "nSetStartDelay", "(JJ)V", (void*) setStartDelay },
     { "nSetInterpolator", "(JJ)V", (void*) setInterpolator },
     { "nSetAllowRunningAsync", "(JZ)V", (void*) setAllowRunningAsync },
-    { "nStart", "(JLandroid/view/RenderNodeAnimator;)V", (void*) start },
+    { "nSetListener", "(JLandroid/view/RenderNodeAnimator;)V", (void*) setListener},
+    { "nStart", "(J)V", (void*) start},
     { "nEnd", "(J)V", (void*) end },
 #endif
 };
 
-#define FIND_CLASS(var, className) \
-        var = env->FindClass(className); \
-        LOG_FATAL_IF(! var, "Unable to find class " className);
-
-#define GET_STATIC_METHOD_ID(var, clazz, methodName, methodDescriptor) \
-        var = env->GetStaticMethodID(clazz, methodName, methodDescriptor); \
-        LOG_FATAL_IF(! var, "Unable to find method " methodName);
-
 int register_android_view_RenderNodeAnimator(JNIEnv* env) {
-    FIND_CLASS(gRenderNodeAnimatorClassInfo.clazz, kClassPathName);
-    gRenderNodeAnimatorClassInfo.clazz = jclass(env->NewGlobalRef(gRenderNodeAnimatorClassInfo.clazz));
+#ifdef USE_OPENGL_RENDERER
+    sLifecycleChecker.incStrong(0);
+#endif
+    gRenderNodeAnimatorClassInfo.clazz = FindClassOrDie(env, kClassPathName);
+    gRenderNodeAnimatorClassInfo.clazz = MakeGlobalRefOrDie(env,
+                                                            gRenderNodeAnimatorClassInfo.clazz);
 
-    GET_STATIC_METHOD_ID(gRenderNodeAnimatorClassInfo.callOnFinished, gRenderNodeAnimatorClassInfo.clazz,
-            "callOnFinished", "(Landroid/view/RenderNodeAnimator;)V");
+    gRenderNodeAnimatorClassInfo.callOnFinished = GetStaticMethodIDOrDie(
+            env, gRenderNodeAnimatorClassInfo.clazz, "callOnFinished",
+            "(Landroid/view/RenderNodeAnimator;)V");
 
-    return AndroidRuntime::registerNativeMethods(env, kClassPathName, gMethods, NELEM(gMethods));
+    return RegisterMethodsOrDie(env, kClassPathName, gMethods, NELEM(gMethods));
 }
 
 

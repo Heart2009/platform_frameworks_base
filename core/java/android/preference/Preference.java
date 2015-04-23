@@ -215,7 +215,7 @@ public class Preference implements Comparable<Preference> {
 
         final TypedArray a = context.obtainStyledAttributes(
                 attrs, com.android.internal.R.styleable.Preference, defStyleAttr, defStyleRes);
-        for (int i = a.getIndexCount(); i >= 0; i--) {
+        for (int i = a.getIndexCount() - 1; i >= 0; i--) {
             int attr = a.getIndex(i); 
             switch (attr) {
                 case com.android.internal.R.styleable.Preference_icon:
@@ -1426,7 +1426,7 @@ public class Preference implements Comparable<Preference> {
     protected boolean persistString(String value) {
         if (shouldPersist()) {
             // Shouldn't store null
-            if (value == getPersistedString(null)) {
+            if (TextUtils.equals(value, getPersistedString(null))) {
                 // It's already there, so the same as persisting
                 return true;
             }

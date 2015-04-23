@@ -15,7 +15,7 @@
 #include "JNIHelp.h"
 #include "GraphicsJNI.h"
 
-#include <android_runtime/AndroidRuntime.h>
+#include "core_jni_helpers.h"
 #include <androidfw/Asset.h>
 #include <androidfw/ResourceTypes.h>
 #include <cutils/compiler.h>
@@ -49,12 +49,6 @@ jmethodID gInsetStruct_constructorMethodID;
 
 using namespace android;
 
-static inline int32_t validOrNeg1(bool isValid, int32_t value) {
-//    return isValid ? value : -1;
-    SkASSERT((int)isValid == 0 || (int)isValid == 1);
-    return ((int32_t)isValid - 1) | value;
-}
-
 jstring getMimeTypeString(JNIEnv* env, SkImageDecoder::Format format) {
     static const struct {
         SkImageDecoder::Format fFormat;
@@ -69,7 +63,7 @@ jstring getMimeTypeString(JNIEnv* env, SkImageDecoder::Format format) {
         { SkImageDecoder::kWBMP_Format, "image/vnd.wap.wbmp" }
     };
 
-    const char* cstr = NULL;
+    const char* cstr = nullptr;
     for (size_t i = 0; i < SK_ARRAY_COUNT(gMimeTypes); i++) {
         if (gMimeTypes[i].fFormat == format) {
             cstr = gMimeTypes[i].fMimeType;
@@ -77,8 +71,10 @@ jstring getMimeTypeString(JNIEnv* env, SkImageDecoder::Format format) {
         }
     }
 
-    jstring jstr = 0;
-    if (NULL != cstr) {
+    jstring jstr = nullptr;
+    if (cstr != nullptr) {
+        // NOTE: Caller should env->ExceptionCheck() for OOM
+        // (can't check for nullptr as it's a valid return value)
         jstr = env->NewStringUTF(cstr);
     }
     return jstr;
@@ -185,8 +181,8 @@ public:
 
         const size_t size = sk_64_asS32(size64);
         if (size > mSize) {
-            ALOGW("bitmap marked for reuse (%d bytes) can't fit new bitmap (%d bytes)",
-                    mSize, size);
+            ALOGW("bitmap marked for reuse (%u bytes) can't fit new bitmap "
+                  "(%zu bytes)", mSize, size);
             return false;
         }
 
@@ -315,7 +311,8 @@ static jobject doDecode(JNIEnv* env, SkStreamRewindable* stream, jobject padding
     }
 
     SkBitmap decodingBitmap;
-    if (!decoder->decode(stream, &decodingBitmap, prefColorType, decodeMode)) {
+    if (decoder->decode(stream, &decodingBitmap, prefColorType, decodeMode)
+                != SkImageDecoder::kSuccess) {
         return nullObjectReturn("decoder->decode returned false");
     }
 
@@ -329,10 +326,13 @@ static jobject doDecode(JNIEnv* env, SkStreamRewindable* stream, jobject padding
 
     // update options (if any)
     if (options != NULL) {
+        jstring mimeType = getMimeTypeString(env, decoder->getFormat());
+        if (env->ExceptionCheck()) {
+            return nullObjectReturn("OOM in getMimeTypeString()");
+        }
         env->SetIntField(options, gOptions_widthFieldID, scaledWidth);
         env->SetIntField(options, gOptions_heightFieldID, scaledHeight);
-        env->SetObjectField(options, gOptions_mimeFieldID,
-                getMimeTypeString(env, decoder->getFormat()));
+        env->SetObjectField(options, gOptions_mimeFieldID, mimeType);
     }
 
     // if we're in justBounds mode, return now (skip the java bitmap)
@@ -478,7 +478,7 @@ static jobject nativeDecodeFileDescriptor(JNIEnv* env, jobject clazz, jobject fi
 
     NPE_CHECK_RETURN_ZERO(env, fileDescriptor);
 
-    jint descriptor = jniGetFDFromFileDescriptor(env, fileDescriptor);
+    int descriptor = jniGetFDFromFileDescriptor(env, fileDescriptor);
 
     struct stat fdStat;
     if (fstat(descriptor, &fdStat) == -1) {
@@ -486,16 +486,27 @@ static jobject nativeDecodeFileDescriptor(JNIEnv* env, jobject clazz, jobject fi
         return nullObjectReturn("fstat return -1");
     }
 
-    // Restore the descriptor's offset on exiting this function.
+    // Restore the descriptor's offset on exiting this function. Even though
+    // we dup the descriptor, both the original and dup refer to the same open
+    // file description and changes to the file offset in one impact the other.
     AutoFDSeek autoRestore(descriptor);
 
-    FILE* file = fdopen(descriptor, "r");
+    // Duplicate the descriptor here to prevent leaking memory. A leak occurs
+    // if we only close the file descriptor and not the file object it is used to
+    // create.  If we don't explicitly clean up the file (which in turn closes the
+    // descriptor) the buffers allocated internally by fseek will be leaked.
+    int dupDescriptor = dup(descriptor);
+
+    FILE* file = fdopen(dupDescriptor, "r");
     if (file == NULL) {
+        // cleanup the duplicated descriptor since it will not be closed when the
+        // file is cleaned up (fclose).
+        close(dupDescriptor);
         return nullObjectReturn("Could not open file");
     }
 
     SkAutoTUnref<SkFILEStream> fileStream(new SkFILEStream(file,
-                         SkFILEStream::kCallerRetains_Ownership));
+                         SkFILEStream::kCallerPasses_Ownership));
 
     // Use a buffered stream. Although an SkFILEStream can be rewound, this
     // ensures that SkImageDecoder::Factory never rewinds beyond the
@@ -568,52 +579,40 @@ static JNINativeMethod gOptionsMethods[] = {
     {   "requestCancel", "()V", (void*)nativeRequestCancel }
 };
 
-static jfieldID getFieldIDCheck(JNIEnv* env, jclass clazz,
-                                const char fieldname[], const char type[]) {
-    jfieldID id = env->GetFieldID(clazz, fieldname, type);
-    SkASSERT(id);
-    return id;
-}
-
 int register_android_graphics_BitmapFactory(JNIEnv* env) {
-    jclass options_class = env->FindClass("android/graphics/BitmapFactory$Options");
-    SkASSERT(options_class);
-    gOptions_bitmapFieldID = getFieldIDCheck(env, options_class, "inBitmap",
+    jclass options_class = FindClassOrDie(env, "android/graphics/BitmapFactory$Options");
+    gOptions_bitmapFieldID = GetFieldIDOrDie(env, options_class, "inBitmap",
             "Landroid/graphics/Bitmap;");
-    gOptions_justBoundsFieldID = getFieldIDCheck(env, options_class, "inJustDecodeBounds", "Z");
-    gOptions_sampleSizeFieldID = getFieldIDCheck(env, options_class, "inSampleSize", "I");
-    gOptions_configFieldID = getFieldIDCheck(env, options_class, "inPreferredConfig",
+    gOptions_justBoundsFieldID = GetFieldIDOrDie(env, options_class, "inJustDecodeBounds", "Z");
+    gOptions_sampleSizeFieldID = GetFieldIDOrDie(env, options_class, "inSampleSize", "I");
+    gOptions_configFieldID = GetFieldIDOrDie(env, options_class, "inPreferredConfig",
             "Landroid/graphics/Bitmap$Config;");
-    gOptions_premultipliedFieldID = getFieldIDCheck(env, options_class, "inPremultiplied", "Z");
-    gOptions_mutableFieldID = getFieldIDCheck(env, options_class, "inMutable", "Z");
-    gOptions_ditherFieldID = getFieldIDCheck(env, options_class, "inDither", "Z");
-    gOptions_preferQualityOverSpeedFieldID = getFieldIDCheck(env, options_class,
+    gOptions_premultipliedFieldID = GetFieldIDOrDie(env, options_class, "inPremultiplied", "Z");
+    gOptions_mutableFieldID = GetFieldIDOrDie(env, options_class, "inMutable", "Z");
+    gOptions_ditherFieldID = GetFieldIDOrDie(env, options_class, "inDither", "Z");
+    gOptions_preferQualityOverSpeedFieldID = GetFieldIDOrDie(env, options_class,
             "inPreferQualityOverSpeed", "Z");
-    gOptions_scaledFieldID = getFieldIDCheck(env, options_class, "inScaled", "Z");
-    gOptions_densityFieldID = getFieldIDCheck(env, options_class, "inDensity", "I");
-    gOptions_screenDensityFieldID = getFieldIDCheck(env, options_class, "inScreenDensity", "I");
-    gOptions_targetDensityFieldID = getFieldIDCheck(env, options_class, "inTargetDensity", "I");
-    gOptions_widthFieldID = getFieldIDCheck(env, options_class, "outWidth", "I");
-    gOptions_heightFieldID = getFieldIDCheck(env, options_class, "outHeight", "I");
-    gOptions_mimeFieldID = getFieldIDCheck(env, options_class, "outMimeType", "Ljava/lang/String;");
-    gOptions_mCancelID = getFieldIDCheck(env, options_class, "mCancel", "Z");
+    gOptions_scaledFieldID = GetFieldIDOrDie(env, options_class, "inScaled", "Z");
+    gOptions_densityFieldID = GetFieldIDOrDie(env, options_class, "inDensity", "I");
+    gOptions_screenDensityFieldID = GetFieldIDOrDie(env, options_class, "inScreenDensity", "I");
+    gOptions_targetDensityFieldID = GetFieldIDOrDie(env, options_class, "inTargetDensity", "I");
+    gOptions_widthFieldID = GetFieldIDOrDie(env, options_class, "outWidth", "I");
+    gOptions_heightFieldID = GetFieldIDOrDie(env, options_class, "outHeight", "I");
+    gOptions_mimeFieldID = GetFieldIDOrDie(env, options_class, "outMimeType", "Ljava/lang/String;");
+    gOptions_mCancelID = GetFieldIDOrDie(env, options_class, "mCancel", "Z");
 
-    jclass bitmap_class = env->FindClass("android/graphics/Bitmap");
-    SkASSERT(bitmap_class);
-    gBitmap_nativeBitmapFieldID = getFieldIDCheck(env, bitmap_class, "mNativeBitmap", "J");
-    gBitmap_ninePatchInsetsFieldID = getFieldIDCheck(env, bitmap_class, "mNinePatchInsets",
+    jclass bitmap_class = FindClassOrDie(env, "android/graphics/Bitmap");
+    gBitmap_nativeBitmapFieldID = GetFieldIDOrDie(env, bitmap_class, "mNativeBitmap", "J");
+    gBitmap_ninePatchInsetsFieldID = GetFieldIDOrDie(env, bitmap_class, "mNinePatchInsets",
             "Landroid/graphics/NinePatch$InsetStruct;");
 
-    gInsetStruct_class = (jclass) env->NewGlobalRef(env->FindClass("android/graphics/NinePatch$InsetStruct"));
-    gInsetStruct_constructorMethodID = env->GetMethodID(gInsetStruct_class, "<init>", "(IIIIIIIIFIF)V");
+    gInsetStruct_class = MakeGlobalRefOrDie(env, FindClassOrDie(env,
+        "android/graphics/NinePatch$InsetStruct"));
+    gInsetStruct_constructorMethodID = GetMethodIDOrDie(env, gInsetStruct_class, "<init>",
+                                                        "(IIIIIIIIFIF)V");
 
-    int ret = AndroidRuntime::registerNativeMethods(env,
-                                    "android/graphics/BitmapFactory$Options",
-                                    gOptionsMethods,
-                                    SK_ARRAY_COUNT(gOptionsMethods));
-    if (ret) {
-        return ret;
-    }
-    return android::AndroidRuntime::registerNativeMethods(env, "android/graphics/BitmapFactory",
-                                         gMethods, SK_ARRAY_COUNT(gMethods));
+    android::RegisterMethodsOrDie(env, "android/graphics/BitmapFactory$Options",
+                                  gOptionsMethods, NELEM(gOptionsMethods));
+    return android::RegisterMethodsOrDie(env, "android/graphics/BitmapFactory",
+                                         gMethods, NELEM(gMethods));
 }

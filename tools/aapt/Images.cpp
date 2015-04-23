@@ -412,7 +412,6 @@ static void find_max_opacity(png_byte** rows,
                              int startX, int startY, int endX, int endY, int dX, int dY,
                              int* out_inset)
 {
-    bool opaque_within_inset = true;
     uint8_t max_opacity = 0;
     int inset = 0;
     *out_inset = 0;
@@ -481,8 +480,9 @@ static void get_outline(image_info* image)
 
     // assuming the image is a round rect, compute the radius by marching
     // diagonally from the top left corner towards the center
-    image->outlineAlpha = max(max_alpha_over_row(image->rows[innerMidY], innerStartX, innerEndX),
-            max_alpha_over_col(image->rows, innerMidX, innerStartY, innerStartY));
+    image->outlineAlpha = std::max(
+        max_alpha_over_row(image->rows[innerMidY], innerStartX, innerEndX),
+        max_alpha_over_col(image->rows, innerMidX, innerStartY, innerStartY));
 
     int diagonalInset = 0;
     find_max_opacity(image->rows, innerStartX, innerStartY, innerMidX, innerMidY, 1, 1,

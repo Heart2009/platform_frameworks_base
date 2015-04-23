@@ -20,9 +20,13 @@
 #include "SkBitmap.h"
 #include "SkMatrix.h"
 #include "fpdfview.h"
-#include "fsdk_rendercontext.h"
 
-#include <android_runtime/AndroidRuntime.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdelete-non-virtual-dtor"
+#include "fsdk_rendercontext.h"
+#pragma GCC diagnostic pop
+
+#include "core_jni_helpers.h"
 #include <vector>
 #include <utils/Log.h>
 #include <unistd.h>
@@ -82,8 +86,17 @@ static jlong nativeCreate(JNIEnv* env, jclass thiz, jint fd, jlong size) {
 
     if (!document) {
         const long error = FPDF_GetLastError();
-        jniThrowException(env, "java/io/IOException",
-                "cannot create document. Error:" + error);
+        switch (error) {
+            case FPDF_ERR_PASSWORD:
+            case FPDF_ERR_SECURITY: {
+                jniThrowExceptionFmt(env, "java/lang/SecurityException",
+                        "cannot create document. Error: %ld", error);
+            } break;
+            default: {
+                jniThrowExceptionFmt(env, "java/io/IOException",
+                        "cannot create document. Error: %ld", error);
+            } break;
+        }
         destroyLibraryIfNeeded();
         return -1;
     }
@@ -228,7 +241,6 @@ static void nativeRenderPage(JNIEnv* env, jclass thiz, jlong documentPtr, jlong 
         jlong bitmapPtr, jint destLeft, jint destTop, jint destRight, jint destBottom,
         jlong matrixPtr, jint renderMode) {
 
-    FPDF_DOCUMENT document = reinterpret_cast<FPDF_DOCUMENT>(documentPtr);
     FPDF_PAGE page = reinterpret_cast<FPDF_PAGE>(pagePtr);
     SkBitmap* skBitmap = reinterpret_cast<SkBitmap*>(bitmapPtr);
     SkMatrix* skMatrix = reinterpret_cast<SkMatrix*>(matrixPtr);
@@ -270,13 +282,13 @@ static JNINativeMethod gPdfRenderer_Methods[] = {
 };
 
 int register_android_graphics_pdf_PdfRenderer(JNIEnv* env) {
-    int result = android::AndroidRuntime::registerNativeMethods(
+    int result = RegisterMethodsOrDie(
             env, "android/graphics/pdf/PdfRenderer", gPdfRenderer_Methods,
             NELEM(gPdfRenderer_Methods));
 
-    jclass clazz = env->FindClass("android/graphics/Point");
-    gPointClassInfo.x = env->GetFieldID(clazz, "x", "I");
-    gPointClassInfo.y = env->GetFieldID(clazz, "y", "I");
+    jclass clazz = FindClassOrDie(env, "android/graphics/Point");
+    gPointClassInfo.x = GetFieldIDOrDie(env, clazz, "x", "I");
+    gPointClassInfo.y = GetFieldIDOrDie(env, clazz, "y", "I");
 
     return result;
 };

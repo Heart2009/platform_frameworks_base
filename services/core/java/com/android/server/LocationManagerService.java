@@ -60,6 +60,8 @@ import android.location.Address;
 import android.location.Criteria;
 import android.location.GeocoderParams;
 import android.location.Geofence;
+import android.location.GpsMeasurementsEvent;
+import android.location.GpsNavigationMessageEvent;
 import android.location.IGpsMeasurementsListener;
 import android.location.IGpsNavigationMessageListener;
 import android.location.IGpsStatusListener;
@@ -1450,14 +1452,13 @@ public class LocationManagerService extends ILocationManager.Stub {
         if (receiver == null) {
             receiver = new Receiver(listener, null, pid, uid, packageName, workSource,
                     hideFromAppOps);
-            mReceivers.put(binder, receiver);
-
             try {
                 receiver.getListener().asBinder().linkToDeath(receiver, 0);
             } catch (RemoteException e) {
                 Slog.e(TAG, "linkToDeath failed:", e);
                 return null;
             }
+            mReceivers.put(binder, receiver);
         }
         return receiver;
     }
@@ -1796,9 +1797,6 @@ public class LocationManagerService extends ILocationManager.Stub {
 
     @Override
     public boolean addGpsStatusListener(IGpsStatusListener listener, String packageName) {
-        if (mGpsStatusProvider == null) {
-            return false;
-        }
         int allowedResolutionLevel = getCallerAllowedResolutionLevel();
         checkResolutionLevelIsSufficientForProviderUse(allowedResolutionLevel,
                 LocationManager.GPS_PROVIDER);
@@ -1811,6 +1809,10 @@ public class LocationManagerService extends ILocationManager.Stub {
             }
         } finally {
             Binder.restoreCallingIdentity(ident);
+        }
+
+        if (mGpsStatusProvider == null) {
+            return false;
         }
 
         try {
@@ -1858,8 +1860,8 @@ public class LocationManagerService extends ILocationManager.Stub {
     }
 
     @Override
-    public boolean removeGpsMeasurementsListener(IGpsMeasurementsListener listener) {
-        return mGpsMeasurementsProvider.removeListener(listener);
+    public void removeGpsMeasurementsListener(IGpsMeasurementsListener listener) {
+        mGpsMeasurementsProvider.removeListener(listener);
     }
 
     @Override
@@ -1887,8 +1889,8 @@ public class LocationManagerService extends ILocationManager.Stub {
     }
 
     @Override
-    public boolean removeGpsNavigationMessageListener(IGpsNavigationMessageListener listener) {
-        return mGpsNavigationMessageProvider.removeListener(listener);
+    public void removeGpsNavigationMessageListener(IGpsNavigationMessageListener listener) {
+        mGpsNavigationMessageProvider.removeListener(listener);
     }
 
     @Override

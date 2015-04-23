@@ -46,6 +46,8 @@
 
 #include <android_runtime/AndroidRuntime.h>
 
+#include "core_jni_helpers.h"
+
 //#undef ALOGV
 //#define ALOGV(...) fprintf(stderr, __VA_ARGS__)
 
@@ -275,7 +277,9 @@ static void android_os_Parcel_writeString(JNIEnv* env, jclass clazz, jlong nativ
         if (val) {
             const jchar* str = env->GetStringCritical(val, 0);
             if (str) {
-                err = parcel->writeString16(str, env->GetStringLength(val));
+                err = parcel->writeString16(
+                    reinterpret_cast<const char16_t*>(str),
+                    env->GetStringLength(val));
                 env->ReleaseStringCritical(val, str);
             }
         } else {
@@ -409,7 +413,7 @@ static jstring android_os_Parcel_readString(JNIEnv* env, jclass clazz, jlong nat
         size_t len;
         const char16_t* str = parcel->readString16Inplace(&len);
         if (str) {
-            return env->NewString(str, len);
+            return env->NewString(reinterpret_cast<const jchar*>(str), len);
         }
         return NULL;
     }
@@ -451,7 +455,8 @@ static jobject android_os_Parcel_openFileDescriptor(JNIEnv* env, jclass clazz,
         jniThrowException(env, "java/lang/IllegalStateException", NULL);
         return NULL;
     }
-    String8 name8(str, env->GetStringLength(name));
+    String8 name8(reinterpret_cast<const char16_t*>(str),
+                  env->GetStringLength(name));
     env->ReleaseStringCritical(name, str);
     int flags=0;
     switch (mode&0x30000000) {
@@ -646,7 +651,9 @@ static void android_os_Parcel_writeInterfaceToken(JNIEnv* env, jclass clazz, jlo
         // the caller expects to be invoking
         const jchar* str = env->GetStringCritical(name, 0);
         if (str != NULL) {
-            parcel->writeInterfaceToken(String16(str, env->GetStringLength(name)));
+            parcel->writeInterfaceToken(String16(
+                  reinterpret_cast<const char16_t*>(str),
+                  env->GetStringLength(name)));
             env->ReleaseStringCritical(name, str);
         }
     }
@@ -654,8 +661,6 @@ static void android_os_Parcel_writeInterfaceToken(JNIEnv* env, jclass clazz, jlo
 
 static void android_os_Parcel_enforceInterface(JNIEnv* env, jclass clazz, jlong nativePtr, jstring name)
 {
-    jboolean ret = JNI_FALSE;
-
     Parcel* parcel = reinterpret_cast<Parcel*>(nativePtr);
     if (parcel != NULL) {
         const jchar* str = env->GetStringCritical(name, 0);
@@ -663,7 +668,8 @@ static void android_os_Parcel_enforceInterface(JNIEnv* env, jclass clazz, jlong 
             IPCThreadState* threadState = IPCThreadState::self();
             const int32_t oldPolicy = threadState->getStrictModePolicy();
             const bool isValid = parcel->enforceInterface(
-                String16(str, env->GetStringLength(name)),
+                String16(reinterpret_cast<const char16_t*>(str),
+                         env->GetStringLength(name)),
                 threadState);
             env->ReleaseStringCritical(name, str);
             if (isValid) {
@@ -686,6 +692,16 @@ static void android_os_Parcel_enforceInterface(JNIEnv* env, jclass clazz, jlong 
     // all error conditions wind up here
     jniThrowException(env, "java/lang/SecurityException",
             "Binder invocation to an incorrect interface");
+}
+
+static jlong android_os_Parcel_getGlobalAllocSize(JNIEnv* env, jclass clazz)
+{
+    return Parcel::getGlobalAllocSize();
+}
+
+static jlong android_os_Parcel_getGlobalAllocCount(JNIEnv* env, jclass clazz)
+{
+    return Parcel::getGlobalAllocCount();
 }
 
 // ----------------------------------------------------------------------------
@@ -737,26 +753,23 @@ static const JNINativeMethod gParcelMethods[] = {
     {"nativeHasFileDescriptors",  "(J)Z", (void*)android_os_Parcel_hasFileDescriptors},
     {"nativeWriteInterfaceToken", "(JLjava/lang/String;)V", (void*)android_os_Parcel_writeInterfaceToken},
     {"nativeEnforceInterface",    "(JLjava/lang/String;)V", (void*)android_os_Parcel_enforceInterface},
+
+    {"getGlobalAllocSize",        "()J", (void*)android_os_Parcel_getGlobalAllocSize},
+    {"getGlobalAllocCount",       "()J", (void*)android_os_Parcel_getGlobalAllocCount},
 };
 
 const char* const kParcelPathName = "android/os/Parcel";
 
 int register_android_os_Parcel(JNIEnv* env)
 {
-    jclass clazz;
+    jclass clazz = FindClassOrDie(env, kParcelPathName);
 
-    clazz = env->FindClass(kParcelPathName);
-    LOG_FATAL_IF(clazz == NULL, "Unable to find class android.os.Parcel");
+    gParcelOffsets.clazz = MakeGlobalRefOrDie(env, clazz);
+    gParcelOffsets.mNativePtr = GetFieldIDOrDie(env, clazz, "mNativePtr", "J");
+    gParcelOffsets.obtain = GetStaticMethodIDOrDie(env, clazz, "obtain", "()Landroid/os/Parcel;");
+    gParcelOffsets.recycle = GetMethodIDOrDie(env, clazz, "recycle", "()V");
 
-    gParcelOffsets.clazz = (jclass) env->NewGlobalRef(clazz);
-    gParcelOffsets.mNativePtr = env->GetFieldID(clazz, "mNativePtr", "J");
-    gParcelOffsets.obtain = env->GetStaticMethodID(clazz, "obtain",
-                                                   "()Landroid/os/Parcel;");
-    gParcelOffsets.recycle = env->GetMethodID(clazz, "recycle", "()V");
-
-    return AndroidRuntime::registerNativeMethods(
-        env, kParcelPathName,
-        gParcelMethods, NELEM(gParcelMethods));
+    return RegisterMethodsOrDie(env, kParcelPathName, gParcelMethods, NELEM(gParcelMethods));
 }
 
 };

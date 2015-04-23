@@ -16,7 +16,7 @@
 
 #include "jni.h"
 #include "GraphicsJNI.h"
-#include <android_runtime/AndroidRuntime.h>
+#include "core_jni_helpers.h"
 
 #include "Canvas.h"
 #include "SkDrawFilter.h"
@@ -556,42 +556,6 @@ static void drawTextRunString(JNIEnv* env, jobject obj, jlong canvasHandle, jstr
     env->ReleaseStringChars(text, jchars);
 }
 
-static void drawPosTextChars(JNIEnv* env, jobject, jlong canvasHandle, jcharArray text,
-                             jint index, jint count, jfloatArray pos, jlong paintHandle) {
-    Paint* paint = reinterpret_cast<Paint*>(paintHandle);
-    jchar* jchars = text ? env->GetCharArrayElements(text, NULL) : NULL;
-    float* posArray = pos ? env->GetFloatArrayElements(pos, NULL) : NULL;
-    int posCount = pos ? env->GetArrayLength(pos) >> 1: 0;
-
-    get_canvas(canvasHandle)->drawPosText(jchars + index, posArray, count << 1, posCount, *paint);
-
-    if (text) {
-        env->ReleaseCharArrayElements(text, jchars, 0);
-    }
-    if (pos) {
-        env->ReleaseFloatArrayElements(pos, posArray, 0);
-    }
-}
-
-
-static void drawPosTextString(JNIEnv* env, jobject, jlong canvasHandle, jstring text,
-                              jfloatArray pos, jlong paintHandle) {
-    Paint* paint = reinterpret_cast<Paint*>(paintHandle);
-    const jchar* jchars = text ? env->GetStringChars(text, NULL) : NULL;
-    int byteLength = text ? env->GetStringLength(text) : 0;
-    float* posArray = pos ? env->GetFloatArrayElements(pos, NULL) : NULL;
-    int posCount = pos ? env->GetArrayLength(pos) >> 1: 0;
-
-    get_canvas(canvasHandle)->drawPosText(jchars , posArray, byteLength << 1, posCount, *paint);
-
-    if (text) {
-        env->ReleaseStringChars(text, jchars);
-    }
-    if (pos) {
-        env->ReleaseFloatArrayElements(pos, posArray, 0);
-    }
-}
-
 class DrawTextOnPathFunctor {
 public:
     DrawTextOnPathFunctor(const Layout& layout, Canvas* canvas, float hOffset,
@@ -736,7 +700,7 @@ static JNINativeMethod gMethods[] = {
 };
 
 int register_android_graphics_Canvas(JNIEnv* env) {
-    return AndroidRuntime::registerNativeMethods(env, "android/graphics/Canvas", gMethods, NELEM(gMethods));
+    return RegisterMethodsOrDie(env, "android/graphics/Canvas", gMethods, NELEM(gMethods));
 }
 
 }; // namespace android

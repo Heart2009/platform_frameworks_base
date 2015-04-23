@@ -207,7 +207,8 @@ MyMtpDatabase::MyMtpDatabase(JNIEnv *env, jobject client)
         return; // Already threw.
     }
     mLongBuffer = (jlongArray)env->NewGlobalRef(longArray);
-    jcharArray charArray = env->NewCharArray(256);
+    // Needs to be long enough to hold a file path for getObjectFilePath()
+    jcharArray charArray = env->NewCharArray(PATH_MAX + 1);
     if (!charArray) {
         return; // Already threw.
     }
@@ -468,6 +469,63 @@ out:
     return result;
 }
 
+static bool readLongValue(int type, MtpDataPacket& packet, jlong& longValue) {
+    switch (type) {
+        case MTP_TYPE_INT8: {
+            int8_t temp;
+            if (!packet.getInt8(temp)) return false;
+            longValue = temp;
+            break;
+        }
+        case MTP_TYPE_UINT8: {
+            uint8_t temp;
+            if (!packet.getUInt8(temp)) return false;
+            longValue = temp;
+            break;
+        }
+        case MTP_TYPE_INT16: {
+            int16_t temp;
+            if (!packet.getInt16(temp)) return false;
+            longValue = temp;
+            break;
+        }
+        case MTP_TYPE_UINT16: {
+            uint16_t temp;
+            if (!packet.getUInt16(temp)) return false;
+            longValue = temp;
+            break;
+        }
+        case MTP_TYPE_INT32: {
+            int32_t temp;
+            if (!packet.getInt32(temp)) return false;
+            longValue = temp;
+            break;
+        }
+        case MTP_TYPE_UINT32: {
+            uint32_t temp;
+            if (!packet.getUInt32(temp)) return false;
+            longValue = temp;
+            break;
+        }
+        case MTP_TYPE_INT64: {
+            int64_t temp;
+            if (!packet.getInt64(temp)) return false;
+            longValue = temp;
+            break;
+        }
+        case MTP_TYPE_UINT64: {
+            uint64_t temp;
+            if (!packet.getUInt64(temp)) return false;
+            longValue = temp;
+            break;
+        }
+        default:
+            ALOGE("unsupported type in readLongValue");
+            return false;
+    }
+    return true;
+}
+
 MtpResponseCode MyMtpDatabase::setObjectPropertyValue(MtpObjectHandle handle,
                                             MtpObjectProperty property,
                                             MtpDataPacket& packet) {
@@ -479,49 +537,22 @@ MtpResponseCode MyMtpDatabase::setObjectPropertyValue(MtpObjectHandle handle,
     JNIEnv* env = AndroidRuntime::getJNIEnv();
     jlong longValue = 0;
     jstring stringValue = NULL;
+    MtpResponseCode result = MTP_RESPONSE_INVALID_OBJECT_PROP_FORMAT;
 
-    switch (type) {
-        case MTP_TYPE_INT8:
-            longValue = packet.getInt8();
-            break;
-        case MTP_TYPE_UINT8:
-            longValue = packet.getUInt8();
-            break;
-        case MTP_TYPE_INT16:
-            longValue = packet.getInt16();
-            break;
-        case MTP_TYPE_UINT16:
-            longValue = packet.getUInt16();
-            break;
-        case MTP_TYPE_INT32:
-            longValue = packet.getInt32();
-            break;
-        case MTP_TYPE_UINT32:
-            longValue = packet.getUInt32();
-            break;
-        case MTP_TYPE_INT64:
-            longValue = packet.getInt64();
-            break;
-        case MTP_TYPE_UINT64:
-            longValue = packet.getUInt64();
-            break;
-        case MTP_TYPE_STR:
-        {
-            MtpStringBuffer buffer;
-            packet.getString(buffer);
-            stringValue = env->NewStringUTF((const char *)buffer);
-            break;
-         }
-        default:
-            ALOGE("unsupported type in setObjectPropertyValue\n");
-            return MTP_RESPONSE_INVALID_OBJECT_PROP_FORMAT;
+    if (type == MTP_TYPE_STR) {
+        MtpStringBuffer buffer;
+        if (!packet.getString(buffer)) goto fail;
+        stringValue = env->NewStringUTF((const char *)buffer);
+    } else {
+        if (!readLongValue(type, packet, longValue)) goto fail;
     }
 
-    jint result = env->CallIntMethod(mDatabase, method_setObjectProperty,
+    result = env->CallIntMethod(mDatabase, method_setObjectProperty,
                 (jint)handle, (jint)property, longValue, stringValue);
     if (stringValue)
         env->DeleteLocalRef(stringValue);
 
+fail:
     checkAndClearExceptionFromCallback(env, __FUNCTION__);
     return result;
 }
@@ -609,49 +640,22 @@ MtpResponseCode MyMtpDatabase::setDevicePropertyValue(MtpDeviceProperty property
     JNIEnv* env = AndroidRuntime::getJNIEnv();
     jlong longValue = 0;
     jstring stringValue = NULL;
+    MtpResponseCode result = MTP_RESPONSE_INVALID_DEVICE_PROP_FORMAT;
 
-    switch (type) {
-        case MTP_TYPE_INT8:
-            longValue = packet.getInt8();
-            break;
-        case MTP_TYPE_UINT8:
-            longValue = packet.getUInt8();
-            break;
-        case MTP_TYPE_INT16:
-            longValue = packet.getInt16();
-            break;
-        case MTP_TYPE_UINT16:
-            longValue = packet.getUInt16();
-            break;
-        case MTP_TYPE_INT32:
-            longValue = packet.getInt32();
-            break;
-        case MTP_TYPE_UINT32:
-            longValue = packet.getUInt32();
-            break;
-        case MTP_TYPE_INT64:
-            longValue = packet.getInt64();
-            break;
-        case MTP_TYPE_UINT64:
-            longValue = packet.getUInt64();
-            break;
-        case MTP_TYPE_STR:
-        {
-            MtpStringBuffer buffer;
-            packet.getString(buffer);
-            stringValue = env->NewStringUTF((const char *)buffer);
-            break;
-         }
-        default:
-            ALOGE("unsupported type in setDevicePropertyValue\n");
-            return MTP_RESPONSE_INVALID_OBJECT_PROP_FORMAT;
+    if (type == MTP_TYPE_STR) {
+        MtpStringBuffer buffer;
+        if (!packet.getString(buffer)) goto fail;
+        stringValue = env->NewStringUTF((const char *)buffer);
+    } else {
+        if (!readLongValue(type, packet, longValue)) goto fail;
     }
 
-    jint result = env->CallIntMethod(mDatabase, method_setDeviceProperty,
+    result = env->CallIntMethod(mDatabase, method_setDeviceProperty,
                 (jint)property, longValue, stringValue);
     if (stringValue)
         env->DeleteLocalRef(stringValue);
 
+fail:
     checkAndClearExceptionFromCallback(env, __FUNCTION__);
     return result;
 }
@@ -761,7 +765,7 @@ MtpResponseCode MyMtpDatabase::getObjectPropertyList(MtpObjectHandle handle,
     return result;
 }
 
-static void foreachentry(ExifEntry *entry, void *user) {
+static void foreachentry(ExifEntry *entry, void* /* user */) {
     char buf[1024];
     ALOGI("entry %x, format %d, size %d: %s",
             entry->tag, entry->format, entry->size, exif_entry_get_value(entry, buf, sizeof(buf)));
@@ -779,7 +783,6 @@ static long getLongFromExifEntry(ExifEntry *e) {
 
 MtpResponseCode MyMtpDatabase::getObjectInfo(MtpObjectHandle handle,
                                             MtpObjectInfo& info) {
-    char            date[20];
     MtpString       path;
     int64_t         length;
     MtpObjectFormat format;
@@ -807,13 +810,15 @@ MtpResponseCode MyMtpDatabase::getObjectInfo(MtpObjectHandle handle,
     info.mDateModified = longValues[1];
     env->ReleaseLongArrayElements(mLongBuffer, longValues, 0);
 
-//    info.mAssociationType = (format == MTP_FORMAT_ASSOCIATION ?
-//                            MTP_ASSOCIATION_TYPE_GENERIC_FOLDER :
-//                            MTP_ASSOCIATION_TYPE_UNDEFINED);
+    if ((false)) {
+        info.mAssociationType = (format == MTP_FORMAT_ASSOCIATION ?
+                                MTP_ASSOCIATION_TYPE_GENERIC_FOLDER :
+                                MTP_ASSOCIATION_TYPE_UNDEFINED);
+    }
     info.mAssociationType = MTP_ASSOCIATION_TYPE_UNDEFINED;
 
     jchar* str = env->GetCharArrayElements(mStringBuffer, 0);
-    MtpString temp(str);
+    MtpString temp(reinterpret_cast<char16_t*>(str));
     info.mName = strdup((const char *)temp);
     env->ReleaseCharArrayElements(mStringBuffer, str, 0);
 
@@ -822,7 +827,9 @@ MtpResponseCode MyMtpDatabase::getObjectInfo(MtpObjectHandle handle,
 
         ExifData *exifdata = exif_data_new_from_file(path);
         if (exifdata) {
-            //exif_data_foreach_content(exifdata, foreachcontent, NULL);
+            if ((false)) {
+                exif_data_foreach_content(exifdata, foreachcontent, NULL);
+            }
 
             // XXX get this from exif, or parse jpeg header instead?
             ExifEntry *w = exif_content_get_entry(
@@ -880,7 +887,8 @@ MtpResponseCode MyMtpDatabase::getObjectFilePath(MtpObjectHandle handle,
     }
 
     jchar* str = env->GetCharArrayElements(mStringBuffer, 0);
-    outFilePath.setTo(str, strlen16(str));
+    outFilePath.setTo(reinterpret_cast<char16_t*>(str),
+                      strlen16(reinterpret_cast<char16_t*>(str)));
     env->ReleaseCharArrayElements(mStringBuffer, str, 0);
 
     jlong* longValues = env->GetLongArrayElements(mLongBuffer, 0);
@@ -926,6 +934,11 @@ static const PropertyTableEntry   kObjectPropertyTable[] = {
     {   MTP_PROPERTY_COMPOSER,          MTP_TYPE_STR        },
     {   MTP_PROPERTY_DURATION,          MTP_TYPE_UINT32     },
     {   MTP_PROPERTY_DESCRIPTION,       MTP_TYPE_STR        },
+    {   MTP_PROPERTY_AUDIO_WAVE_CODEC,  MTP_TYPE_UINT32     },
+    {   MTP_PROPERTY_BITRATE_TYPE,      MTP_TYPE_UINT16     },
+    {   MTP_PROPERTY_AUDIO_BITRATE,     MTP_TYPE_UINT32     },
+    {   MTP_PROPERTY_NUMBER_OF_CHANNELS,MTP_TYPE_UINT16     },
+    {   MTP_PROPERTY_SAMPLE_RATE,       MTP_TYPE_UINT32     },
 };
 
 static const PropertyTableEntry   kDevicePropertyTable[] = {
@@ -1169,8 +1182,6 @@ static JNINativeMethod gMtpPropertyGroupMethods[] = {
     {"format_date_time",        "(J)Ljava/lang/String;",
                                         (void *)android_mtp_MtpPropertyGroup_format_date_time},
 };
-
-static const char* const kClassPathName = "android/mtp/MtpDatabase";
 
 int register_android_mtp_MtpDatabase(JNIEnv *env)
 {

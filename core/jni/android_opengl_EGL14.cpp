@@ -16,6 +16,10 @@
 
 // This source file is automatically generated
 
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+#pragma GCC diagnostic ignored "-Wunused-function"
+
 #include "jni.h"
 #include "JNIHelp.h"
 #include <android_runtime/AndroidRuntime.h>
@@ -156,7 +160,8 @@ static jobject
 android_eglGetDisplayInt
   (JNIEnv *_env, jobject _this, jint display_id) {
 
-    if ((EGLNativeDisplayType)display_id != EGL_DEFAULT_DISPLAY) {
+    if (static_cast<uintptr_t>(display_id) !=
+        reinterpret_cast<uintptr_t>(EGL_DEFAULT_DISPLAY)) {
         jniThrowException(_env, "java/lang/UnsupportedOperationException", "eglGetDisplay");
         return 0;
     }

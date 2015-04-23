@@ -17,24 +17,25 @@
 package com.android.server.pm;
 
 import android.content.pm.ApplicationInfo;
-
-import java.util.HashSet;
+import android.util.ArraySet;
 
 class GrantedPermissions {
     int pkgFlags;
+    int pkgPrivateFlags;
 
-    HashSet<String> grantedPermissions = new HashSet<String>();
+    ArraySet<String> grantedPermissions = new ArraySet<String>();
 
     int[] gids;
 
-    GrantedPermissions(int pkgFlags) {
+    GrantedPermissions(int pkgFlags, int pkgPrivateFlags) {
         setFlags(pkgFlags);
+        setPrivateFlags(pkgPrivateFlags);
     }
 
     @SuppressWarnings("unchecked")
     GrantedPermissions(GrantedPermissions base) {
         pkgFlags = base.pkgFlags;
-        grantedPermissions = (HashSet<String>) base.grantedPermissions.clone();
+        grantedPermissions = new ArraySet<>(base.grantedPermissions);
 
         if (base.gids != null) {
             gids = base.gids.clone();
@@ -44,8 +45,12 @@ class GrantedPermissions {
     void setFlags(int pkgFlags) {
         this.pkgFlags = pkgFlags
                 & (ApplicationInfo.FLAG_SYSTEM
-                        | ApplicationInfo.FLAG_PRIVILEGED
-                        | ApplicationInfo.FLAG_FORWARD_LOCK
                         | ApplicationInfo.FLAG_EXTERNAL_STORAGE);
+    }
+
+    void setPrivateFlags(int pkgPrivateFlags) {
+        this.pkgPrivateFlags = pkgPrivateFlags
+                & (ApplicationInfo.PRIVATE_FLAG_PRIVILEGED
+                        | ApplicationInfo.PRIVATE_FLAG_FORWARD_LOCK);
     }
 }

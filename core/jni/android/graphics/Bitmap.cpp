@@ -15,15 +15,11 @@
 #include "android_nio_utils.h"
 #include "CreateJavaOutputStreamAdaptor.h"
 
+#include "core_jni_helpers.h"
+
 #include <jni.h>
 
-#include <Caches.h>
-
-#if 0
-    #define TRACE_BITMAP(code)  code
-#else
-    #define TRACE_BITMAP(code)
-#endif
+#include <ResourceCache.h>
 
 ///////////////////////////////////////////////////////////////////////////////
 // Conversions to/from SkColor, for get/setPixels, and the create method, which
@@ -43,8 +39,11 @@ static void FromColor_D32(void* dst, const SkColor src[], int width,
 
 static void FromColor_D32_Raw(void* dst, const SkColor src[], int width,
                           int, int) {
+    // Needed to thwart the unreachable code detection from clang.
+    static const bool sk_color_ne_zero = SK_COLOR_MATCHES_PMCOLOR_BYTE_ORDER;
+
     // SkColor's ordering may be different from SkPMColor
-    if (SK_COLOR_MATCHES_PMCOLOR_BYTE_ORDER) {
+    if (sk_color_ne_zero) {
         memcpy(dst, src, width * sizeof(SkColor));
         return;
     }
@@ -365,8 +364,8 @@ static jobject Bitmap_copy(JNIEnv* env, jobject, jlong srcHandle,
 static void Bitmap_destructor(JNIEnv* env, jobject, jlong bitmapHandle) {
     SkBitmap* bitmap = reinterpret_cast<SkBitmap*>(bitmapHandle);
 #ifdef USE_OPENGL_RENDERER
-    if (android::uirenderer::Caches::hasInstance()) {
-        android::uirenderer::Caches::getInstance().resourceCache.destructor(bitmap);
+    if (android::uirenderer::ResourceCache::hasInstance()) {
+        android::uirenderer::ResourceCache::getInstance().destructor(bitmap);
         return;
     }
 #endif // USE_OPENGL_RENDERER
@@ -376,9 +375,9 @@ static void Bitmap_destructor(JNIEnv* env, jobject, jlong bitmapHandle) {
 static jboolean Bitmap_recycle(JNIEnv* env, jobject, jlong bitmapHandle) {
     SkBitmap* bitmap = reinterpret_cast<SkBitmap*>(bitmapHandle);
 #ifdef USE_OPENGL_RENDERER
-    if (android::uirenderer::Caches::hasInstance()) {
+    if (android::uirenderer::ResourceCache::hasInstance()) {
         bool result;
-        result = android::uirenderer::Caches::getInstance().resourceCache.recycle(bitmap);
+        result = android::uirenderer::ResourceCache::getInstance().recycle(bitmap);
         return result ? JNI_TRUE : JNI_FALSE;
     }
 #endif // USE_OPENGL_RENDERER
@@ -873,8 +872,6 @@ static void Bitmap_prepareToDraw(JNIEnv* env, jobject, jlong bitmapHandle) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#include <android_runtime/AndroidRuntime.h>
-
 static JNINativeMethod gBitmapMethods[] = {
     {   "nativeCreate",             "([IIIIIIZ)Landroid/graphics/Bitmap;",
         (void*)Bitmap_creator },
@@ -914,10 +911,8 @@ static JNINativeMethod gBitmapMethods[] = {
     {   "nativePrepareToDraw",      "(J)V", (void*)Bitmap_prepareToDraw },
 };
 
-#define kClassPathName  "android/graphics/Bitmap"
-
 int register_android_graphics_Bitmap(JNIEnv* env)
 {
-    return android::AndroidRuntime::registerNativeMethods(env, kClassPathName,
-                                gBitmapMethods, SK_ARRAY_COUNT(gBitmapMethods));
+    return android::RegisterMethodsOrDie(env, "android/graphics/Bitmap", gBitmapMethods,
+                                         NELEM(gBitmapMethods));
 }

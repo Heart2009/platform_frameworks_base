@@ -17,7 +17,7 @@
 #include <fcntl.h>
 
 #include "JNIHelp.h"
-#include "android_runtime/AndroidRuntime.h"
+#include "core_jni_helpers.h"
 #include "jni.h"
 #include "log/logger.h"
 
@@ -159,7 +159,7 @@ static void android_util_EventLog_readEvents(JNIEnv* env, jobject clazz UNUSED,
     }
 
     struct logger_list *logger_list = android_logger_list_open(
-        LOG_ID_EVENTS, O_RDONLY | O_NONBLOCK, 0, 0);
+        LOG_ID_EVENTS, ANDROID_LOG_RDONLY | ANDROID_LOG_NONBLOCK, 0, 0);
 
     if (!logger_list) {
         jniThrowIOException(env, errno);
@@ -186,6 +186,10 @@ static void android_util_EventLog_readEvents(JNIEnv* env, jobject clazz UNUSED,
                 jniThrowIOException(env, -ret);  // Will throw on return
             }
             break;
+        }
+
+        if (log_msg.id() != LOG_ID_EVENTS) {
+            continue;
         }
 
         int32_t tag = * (int32_t *) log_msg.msg();
@@ -263,33 +267,21 @@ static struct { jclass *c; const char *name, *mt; jmethodID *id; } gMethods[] = 
 
 int register_android_util_EventLog(JNIEnv* env) {
     for (int i = 0; i < NELEM(gClasses); ++i) {
-        jclass clazz = env->FindClass(gClasses[i].name);
-        if (clazz == NULL) {
-            ALOGE("Can't find class: %s\n", gClasses[i].name);
-            return -1;
-        }
-        *gClasses[i].clazz = (jclass) env->NewGlobalRef(clazz);
+        jclass clazz = FindClassOrDie(env, gClasses[i].name);
+        *gClasses[i].clazz = MakeGlobalRefOrDie(env, clazz);
     }
 
     for (int i = 0; i < NELEM(gFields); ++i) {
-        *gFields[i].id = env->GetFieldID(
+        *gFields[i].id = GetFieldIDOrDie(env,
                 *gFields[i].c, gFields[i].name, gFields[i].ft);
-        if (*gFields[i].id == NULL) {
-            ALOGE("Can't find field: %s\n", gFields[i].name);
-            return -1;
-        }
     }
 
     for (int i = 0; i < NELEM(gMethods); ++i) {
-        *gMethods[i].id = env->GetMethodID(
+        *gMethods[i].id = GetMethodIDOrDie(env,
                 *gMethods[i].c, gMethods[i].name, gMethods[i].mt);
-        if (*gMethods[i].id == NULL) {
-            ALOGE("Can't find method: %s\n", gMethods[i].name);
-            return -1;
-        }
     }
 
-    return AndroidRuntime::registerNativeMethods(
+    return RegisterMethodsOrDie(
             env,
             "android/util/EventLog",
             gRegisterMethods, NELEM(gRegisterMethods));
